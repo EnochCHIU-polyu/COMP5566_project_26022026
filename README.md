@@ -1,7 +1,7 @@
 # COMP5566 Smart Contract Vulnerability Detection Framework
 
 An LLM-powered security auditing framework for Ethereum smart contracts.  
-It uses GPT-4 / Claude to systematically check a contract against **38 known DeFi vulnerability types**, produces a human-readable audit report, and provides a Streamlit web interface that lets a human auditor verify findings with highlighted source lines.
+It uses GPT-4 / Claude / DeepSeek to systematically check a contract against **38 known DeFi vulnerability types**, produces structured JSON findings with line-level citations, runs a self-consistency verification pass to reduce false positives, and provides a Streamlit web interface for human-in-the-loop review.
 
 ---
 
@@ -13,24 +13,31 @@ It uses GPT-4 / Claude to systematically check a contract against **38 known DeF
 4. [Installation](#4-installation)
 5. [Configuration](#5-configuration)
 6. [Usage](#6-usage)
-   - [Generate Synthetic Contracts](#61-generate-synthetic-test-contracts)
-   - [Audit a Contract (CLI)](#62-audit-a-contract-via-cli)
-   - [Launch the Web UI](#63-launch-the-streamlit-web-ui)
+   - [Audit a Contract (CLI)](#61-audit-a-contract-via-cli)
+   - [Generate Synthetic Contracts](#62-generate-synthetic-test-contracts)
+   - [Download Benchmark Datasets](#63-download-benchmark-datasets)
+   - [Generate an Audit Report](#64-generate-an-audit-report)
+   - [Launch the Web UI](#65-launch-the-streamlit-web-ui)
 7. [Running Tests](#7-running-tests)
 8. [How It Works](#8-how-it-works)
+   - [Prompt Architecture](#81-prompt-architecture)
+   - [Self-Check Verification](#82-self-check-verification)
+   - [Keyword Pre-Filtering](#83-keyword-pre-filtering)
+   - [Evaluation Metrics](#84-evaluation-metrics)
+9. [Phase-Level Documentation](#9-phase-level-documentation)
 
 ---
 
 ## 1. System Overview
 
-The framework is divided into four phases:
+The framework is organised into four phases, each substantially upgraded from the original baseline:
 
 | Phase | Name | What it does |
 |-------|------|-------------|
-| **1** | Data Pipeline | Fetches contract source code from Etherscan, loads local datasets, generates synthetic contracts with injected vulnerabilities, and preprocesses code to fit inside the LLM context window. |
-| **2** | LLM Engine | Builds the Master Prompt Template and queries GPT-4 or Claude for each of the 38 vulnerability types. Supports *binary* (YES/NO), *non-binary* (detailed explanation), and *Chain-of-Thought* (per-function review) modes. A mandatory 13-second pause between API calls prevents rate-limit errors. |
-| **3** | Hyperparameter Tuning | Provides a predefined experiment grid covering Temperature 0 and Temperature 1 for both GPT-4o and Claude, enabling reproducible comparison runs. |
-| **4** | Evaluation & UI | Calculates TP / FP / TN / FN, Precision, Recall, and F1-score. Includes a Streamlit web application where human auditors can paste a contract, run the audit, see flagged lines highlighted in the source, and record their verification decisions. |
+| **1** | Data Pipeline | Fetches contracts from Etherscan, loads SmartBugs / SolidiFI benchmark datasets, generates 15 synthetic templates with semantic mutation operators, normalises source code (comment stripping, line-number annotation), and smart-chunks large contracts instead of blindly truncating them. |
+| **2** | LLM Engine | Builds structured prompts with a 4-section architecture (role, vulnerability context with examples, JSON output schema, line-numbered source). Supports *binary*, *non-binary*, *Chain-of-Thought*, and *multi-vuln batch* modes. A keyword relevance pre-filter eliminates irrelevant checks (~60–80 % fewer API calls). A self-consistency verification pass re-checks each finding with a sceptical prompt to cut false positives. Exponential-backoff retry handles transient API errors. |
+| **3** | Hyperparameter Tuning | `TuningConfig` dataclass with new fields (`verify`, `batch_vulns`, `use_filter`, `few_shot`). Predefined grid now includes GPT-4o, Claude-3-Opus, and DeepSeek-v3.2 at multiple temperatures, plus a multi-vuln batch config. |
+| **4** | Evaluation & UI | Full metric suite: Precision / Recall / F1 (micro & macro), AUC-ROC, PR-AUC, per-vulnerability-type breakdown, and confidence calibration. Batch experiment runner executes the entire config grid against a benchmark dataset. Report generator produces markdown / HTML audit reports. Results logger persists all runs for reproducibility. |
 
 ---
 
@@ -38,35 +45,46 @@ The framework is divided into four phases:
 
 ```
 COMP5566_project_26022026/
-├── config.py                          # Central configuration (API keys, model, temperature …)
-├── main.py                            # CLI entry point
+├── config.py                              # Central config (API keys, model, temperature …)
+├── main.py                                # CLI entry point
 ├── requirements.txt
 │
-├── phase1_data_pipeline/
-│   ├── etherscan_scraper.py           # Fetch verified contracts from Etherscan API
-│   ├── dataset_loader.py              # Load .sol / .json contract files from disk
-│   ├── synthetic_contracts.py         # Generate 5 synthetic contracts with injected vulns
-│   ├── token_counter.py               # Count tokens (tiktoken) + offline fallback
-│   └── contract_preprocessor.py      # Truncate contracts that exceed the context window
+├── phase1_data_pipeline/                  # → See phase1_data_pipeline/README.md
+│   ├── benchmark_datasets.py              # SmartBugs / SolidiFI downloader + normaliser
+│   ├── contract_chunker.py                # Function-level & sliding-window chunker
+│   ├── contract_normalizer.py             # Comment stripping, whitespace, line numbering
+│   ├── contract_preprocessor.py          # Token counting + normalise + chunk pipeline
+│   ├── dataset_loader.py                  # Load .sol / .json files from disk
+│   ├── etherscan_scraper.py               # Fetch verified contracts from Etherscan API
+│   ├── synthetic_contracts.py             # 15 templates + semantic mutation operators
+│   └── token_counter.py                   # tiktoken-based counting + fallback
 │
-├── phase2_llm_engine/
-│   ├── vulnerability_types.py         # 38 DeFi vulnerability definitions
-│   ├── prompt_builder.py              # Build binary / non-binary / CoT prompts
-│   ├── llm_client.py                  # OpenAI + Anthropic client with rate-limit pause
-│   └── cot_analyzer.py               # Full audit: 38 vuln loop + per-function CoT loop
+├── phase2_llm_engine/                     # → See phase2_llm_engine/README.md
+│   ├── cot_analyzer.py                    # Orchestrates full audit (38 vulns + CoT)
+│   ├── llm_client.py                      # OpenAI / Anthropic / DeepSeek client + retry
+│   ├── output_parser.py                   # Parse structured JSON findings from LLM output
+│   ├── prompt_builder.py                  # 4-section prompt builder (structured / legacy)
+│   ├── relevance_filter.py                # Keyword pre-filter to skip irrelevant checks
+│   ├── self_checker.py                    # Two-pass self-consistency verification
+│   └── vulnerability_types.py             # 38 vuln definitions with SWC/CWE/keywords
 │
-├── phase3_hyperparameter/
-│   └── tuning_config.py              # TuningConfig dataclass + experiment grid
+├── phase3_hyperparameter/                 # → See phase3_hyperparameter/README.md
+│   └── tuning_config.py                   # TuningConfig dataclass + 9-config grid
 │
-├── phase4_evaluation/
-│   ├── scorer.py                      # TP/FP/TN/FN, Precision, Recall, F1
-│   └── ui_app.py                      # Streamlit human-in-the-loop web interface
+├── phase4_evaluation/                     # → See phase4_evaluation/README.md
+│   ├── experiment_runner.py               # Batch grid runner with resume support
+│   ├── report_generator.py                # Markdown / HTML audit report generator
+│   ├── results_logger.py                  # Persistent experiment logger + CSV export
+│   ├── scorer.py                          # TP/FP/TN/FN + AUC-ROC / PR-AUC / calibration
+│   └── ui_app.py                          # Streamlit human-in-the-loop web interface
 │
 ├── data/
-│   ├── vulnerable_contracts/          # Place known-vulnerable .sol / .json files here
-│   └── synthetic_contracts/          # Auto-generated synthetic contracts saved here
+│   ├── benchmarks/                        # Cached SmartBugs / SolidiFI datasets
+│   ├── vulnerable_contracts/              # Known-vulnerable .sol / .json files
+│   └── synthetic_contracts/              # Auto-generated synthetic contracts
 │
-└── tests/                             # Pytest unit tests for all four phases
+├── results/                               # Experiment run outputs (auto-created)
+└── tests/                                 # Pytest unit tests for all four phases
 ```
 
 ---
@@ -74,8 +92,23 @@ COMP5566_project_26022026/
 ## 3. Requirements
 
 - Python **3.10 or higher**
-- An **OpenAI API key** (for GPT-4 / GPT-4o) and/or an **Anthropic API key** (for Claude)
+- An **OpenAI API key** (GPT-4o) and/or **Anthropic API key** (Claude) and/or **DeepSeek API key**
 - (Optional) An **Etherscan API key** to scrape contracts directly from the blockchain
+
+Python dependencies (installed via `requirements.txt`):
+
+| Package | Purpose |
+|---------|---------|
+| `openai` | GPT-4o / GPT-4-turbo API |
+| `anthropic` | Claude API |
+| `tiktoken` | Token counting |
+| `streamlit` | Web UI |
+| `pandas` | Tabular results |
+| `scikit-learn` | AUC-ROC, PR-AUC, calibration |
+| `plotly` | Interactive charts in Streamlit |
+| `matplotlib` | Report plots |
+| `python-dotenv` | `.env` file loading |
+| `pytest` | Test runner |
 
 ---
 
@@ -98,22 +131,30 @@ pip install -r requirements.txt
 
 ## 5. Configuration
 
-Create a `.env` file in the project root (it is already listed in `.gitignore` so your keys stay private):
+Create a `.env` file in the project root (already in `.gitignore`):
 
 ```dotenv
-# Required for LLM auditing
+# ── API Keys ──────────────────────────────────────────────────────
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
+ETHERSCAN_API_KEY=...          # only needed for Etherscan scraping
 
-# Required only for scraping contracts from Etherscan
-ETHERSCAN_API_KEY=...
-
-# Optional overrides (defaults shown)
-DEFAULT_MODEL=gpt-4o          # or claude-3-opus-20240229
-TEMPERATURE=0                 # 0 = deterministic, 1 = more creative
+# ── LLM Settings ──────────────────────────────────────────────────
+DEFAULT_MODEL=gpt-4o           # gpt-4o | claude-3-opus-20240229 | deepseek-v3.2
+TEMPERATURE=0                  # 0 = deterministic, 1 = more creative
 MAX_CONTEXT_TOKENS=32000
-API_PAUSE_SECONDS=13          # pause between LLM calls (avoids rate limits)
-CLASSIFICATION_MODE=non_binary  # binary | non_binary | cot
+API_PAUSE_SECONDS=13           # minimum pause between LLM calls
+
+# ── Classification ─────────────────────────────────────────────────
+CLASSIFICATION_MODE=non_binary # binary | non_binary | cot | multi_vuln
+
+# ── Experiment Settings ────────────────────────────────────────────
+BENCHMARK_DATASET=smartbugs    # smartbugs | solidifi | synthetic | all
+SELF_CHECK_ENABLED=true
+SELF_CHECK_CONFIDENCE_THRESHOLD=0.6
+KEYWORD_PREFILTER_ENABLED=true
+BATCH_VULNS_PER_PROMPT=8
+FEW_SHOT_EXAMPLES=true
 ```
 
 All settings can also be changed directly in `config.py`.
@@ -122,9 +163,47 @@ All settings can also be changed directly in `config.py`.
 
 ## 6. Usage
 
-### 6.1 Generate Synthetic Test Contracts
+### 6.1 Audit a Contract via CLI
 
-Creates 5 Solidity contracts with vulnerabilities deliberately injected, then saves them to `data/synthetic_contracts/` as JSON files.
+```bash
+# Standard non-binary audit (detailed explanation per vuln)
+python main.py audit --contract path/to/MyContract.sol
+
+# Binary mode – YES/NO only (fastest)
+python main.py audit --contract path/to/MyContract.sol --mode binary
+
+# Chain-of-Thought per-function review
+python main.py audit --contract path/to/MyContract.sol --mode cot
+
+# Structured JSON output with self-check verification pass
+python main.py audit --contract path/to/MyContract.sol --verify
+
+# Save results to a JSON file instead of stdout
+python main.py audit --contract path/to/MyContract.sol --output results.json
+
+# Override temperature
+python main.py audit --contract path/to/MyContract.sol --temperature 0.3
+```
+
+**Flags for `audit`:**
+
+| Flag | Values | Default | Description |
+|------|--------|---------|-------------|
+| `--contract` | file path | *(required)* | Path to the `.sol` file to audit |
+| `--mode` | `binary` \| `non_binary` \| `cot` \| `multi_vuln` | `non_binary` | Classification mode |
+| `--temperature` | `0.0` – `1.0` | from `config.py` | LLM sampling temperature |
+| `--output` | file path | *(stdout)* | Write JSON results to a file |
+| `--verify` | flag | `false` | Run two-pass self-check verification |
+
+The JSON result contains:
+
+- `vuln_results` – one entry per vulnerability type checked (up to 38), each with `vuln_name` and LLM `response`.
+- `function_results` – one entry per Solidity function (CoT pass).
+- `verified_findings` – present only when `--verify` is used; each entry has `verified`, `verification_confidence`, and `verification_reasoning`.
+
+---
+
+### 6.2 Generate Synthetic Test Contracts
 
 ```bash
 # Inject 2 vulnerabilities per contract (quick smoke-test)
@@ -137,71 +216,63 @@ python main.py generate-synthetic --num-vulns 15
 **Example output:**
 ```
 Generated 5 synthetic contracts in data/synthetic_contracts/
-  SecureVault: labels = ['Reentrancy']
-  SecureToken: labels = ['Integer Overflow']
+  SecureVault:   labels = ['Reentrancy']
+  SecureToken:   labels = ['Integer Overflow']
+  SecureStaking: labels = ['Unchecked Return Value', 'Timestamp Dependence']
   ...
 ```
 
 ---
 
-### 6.2 Audit a Contract via CLI
-
-Runs the full 38-vulnerability audit on a Solidity file and prints the results as JSON.
+### 6.3 Download Benchmark Datasets
 
 ```bash
-# Non-binary mode (detailed explanations) – default
-python main.py audit --contract path/to/MyContract.sol
+# Download SmartBugs Curated (143 labelled contracts, 10 categories)
+python main.py download-benchmarks --dataset smartbugs
 
-# Binary mode (YES/NO answers only – faster)
-python main.py audit --contract path/to/MyContract.sol --mode binary
+# Download SolidiFI injected-bug dataset
+python main.py download-benchmarks --dataset solidifi
 
-# Chain-of-Thought mode (per-function deep review)
-python main.py audit --contract path/to/MyContract.sol --mode cot
-
-# Override temperature for this run
-python main.py audit --contract path/to/MyContract.sol --temperature 1
+# Download both
+python main.py download-benchmarks --dataset all
 ```
 
-**Available flags for `audit`:**
+Datasets are cached in `data/benchmarks/` to avoid re-downloading.  
+See [`phase1_data_pipeline/README.md`](phase1_data_pipeline/README.md) for manual setup instructions if the automatic download fails.
 
-| Flag | Values | Default | Description |
-|------|--------|---------|-------------|
-| `--contract` | file path | *(required)* | Path to the `.sol` file to audit |
-| `--mode` | `binary` \| `non_binary` \| `cot` | `non_binary` | Classification mode |
-| `--temperature` | `0.0` – `1.0` | from `config.py` | LLM sampling temperature |
+---
 
-The command prints a JSON object with two arrays:
-
-- `vuln_results` – one entry per vulnerability type (38 total), each with `vuln_name` and the LLM `response`.
-- `function_results` – one entry per Solidity function found in the contract (CoT pass).
+### 6.4 Generate an Audit Report
 
 ```bash
-# Save the output to a file
-python main.py audit --contract MyContract.sol --mode binary > audit_report.json
+# Generate a markdown report from saved JSON results
+python main.py report --results results.json --output report.md
+
+# Generate an HTML report
+python main.py report --results results.json --output report.html --format html
 ```
 
 ---
 
-### 6.3 Launch the Streamlit Web UI
-
-The web interface is designed for human auditors to interactively review findings.
+### 6.5 Launch the Streamlit Web UI
 
 ```bash
 streamlit run phase4_evaluation/ui_app.py
 ```
 
-Then open **http://localhost:8501** in your browser.
+Open **http://localhost:8501** in your browser.
 
 **UI features:**
 
 - **Paste or upload** a Solidity contract (`.sol` or `.json`).
-- Token count is displayed automatically; oversized contracts are truncated with a warning.
-- **Select vulnerability types** from the full list of 38, or tick *"Run all 38"*.
-- Choose the **LLM model** and **temperature** in the sidebar.
-- Click **🚀 Run Audit** – a progress bar tracks each vulnerability check.
-- Results are shown as collapsible panels (🔴 flagged / 🟢 clean).
-- Flagged lines are **highlighted in the source code viewer** so you can verify them instantly.
-- Use the **True Positive / False Positive / False Negative** buttons to record your verdict; the sidebar shows live **F1 / Precision / Recall** scores.
+- Token count displayed automatically; oversized contracts truncated with a warning.
+- **Select vulnerability types** from all 38, or tick *"Run all 38"*.
+- Choose **LLM model** (GPT-4o, Claude, DeepSeek, or custom) and **temperature** in the sidebar.
+- Click **🚀 Run Audit** — progress bar tracks each check.
+- Results shown as collapsible panels (🔴 flagged / 🟢 clean).
+- Flagged lines **highlighted in the source code viewer**.
+- **True Positive / False Positive / False Negative** buttons record your verdict.
+- Sidebar shows live **F1 / Precision / Recall** scores.
 
 ---
 
@@ -218,29 +289,84 @@ python -m pytest tests/test_phase3.py -v
 python -m pytest tests/test_phase4.py -v
 ```
 
-All tests run offline — no API keys are needed.
+All tests run **offline** — no API keys are needed.
 
 ---
 
 ## 8. How It Works
 
-Each audit call follows the **Master Prompt Template** from the research paper:
+### 8.1 Prompt Architecture
+
+Each audit uses a **4-section structured prompt**:
 
 ```
-System: You are an AI smart contract auditor … Think step by step.
-
-User:   [Vulnerability Definition]
-        Perform a proper security audit …
-        Is the following smart contract vulnerable to [Vulnerability Name] attacks?
-
-        Source Code:
-        [Contract Source]
+┌─────────────────────────────────────────────────────────────────┐
+│ Section 1 – Role Definition                                      │
+│   "You are a senior smart contract security auditor with 10+    │
+│    years of experience in Solidity and EVM internals…"          │
+├─────────────────────────────────────────────────────────────────┤
+│ Section 2 – Vulnerability Context                                │
+│   Definition + SWC/CWE ID + example vulnerable code +           │
+│   example fixed code (from vulnerability_types.py)              │
+├─────────────────────────────────────────────────────────────────┤
+│ Section 3 – Task Instruction + JSON Output Schema                │
+│   "Is the contract vulnerable to [Vuln]? Cite exact line        │
+│    numbers. Return JSON: {findings:[…], summary, risk_score}"   │
+├─────────────────────────────────────────────────────────────────┤
+│ Section 4 – Source Code (line-numbered)                          │
+│   /* L1 */ pragma solidity ^0.8.0;                              │
+│   /* L2 */ contract Vault {                                      │
+│   …                                                              │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-The framework loops this prompt 38 times (once per vulnerability type) and, in CoT mode, additionally loops over every function in the contract. A minimum **13-second pause** is enforced between API calls to stay within rate limits.
+**Multi-vuln batch mode** (`--mode multi_vuln`) groups up to 8 vulnerability checks into a single LLM call, reducing API calls from 38 to ~5.
 
-The **Evaluation module** compares LLM predictions against ground-truth labels and reports:
+### 8.2 Self-Check Verification
 
-- **Precision** = TP / (TP + FP)
-- **Recall** = TP / (TP + FN)
-- **F1-score** = 2 × Precision × Recall / (Precision + Recall)
+When `--verify` is used, each candidate finding goes through a second *sceptical* pass:
+
+```
+Pass 1 (Detect):  Standard audit → N candidate findings
+Pass 2 (Verify):  For each finding, ask:
+                  "A security auditor claims [VulnType] at [Lines].
+                   Is this genuine or a false positive?
+                   → {verified: bool, confidence: float, reasoning: str}"
+Pass 3 (Merge):   Findings below confidence threshold (default 0.6)
+                  are demoted to INFO severity.
+```
+
+### 8.3 Keyword Pre-Filtering
+
+Before sending a contract to the LLM, `relevance_filter.py` checks each vulnerability's `detection_keywords` against the contract source:
+
+- If none of a vulnerability's keywords appear → skip that check entirely.
+- `Integer Overflow/Underflow` is automatically skipped for Solidity ≥ 0.8.0.
+- Reduces API calls by **60–80 %** on average.
+
+### 8.4 Evaluation Metrics
+
+The evaluation suite computes:
+
+| Metric | Function |
+|--------|----------|
+| Precision / Recall / F1 (per contract) | `compute_metrics()` |
+| Per-vulnerability-type F1 breakdown | `compute_per_vuln_metrics()` |
+| Macro-F1 / Micro-F1 | `evaluate_batch()` |
+| AUC-ROC | `compute_auc_roc()` |
+| PR-AUC (better for imbalanced data) | `compute_pr_auc()` |
+| 38-row confusion matrix | `compute_confusion_matrix_per_type()` |
+| Confidence calibration | `compute_calibration()` |
+
+---
+
+## 9. Phase-Level Documentation
+
+Each phase has its own detailed README:
+
+| Phase | README |
+|-------|--------|
+| Phase 1 – Data Pipeline | [`phase1_data_pipeline/README.md`](phase1_data_pipeline/README.md) |
+| Phase 2 – LLM Engine | [`phase2_llm_engine/README.md`](phase2_llm_engine/README.md) |
+| Phase 3 – Hyperparameter Tuning | [`phase3_hyperparameter/README.md`](phase3_hyperparameter/README.md) |
+| Phase 4 – Evaluation & UI | [`phase4_evaluation/README.md`](phase4_evaluation/README.md) |
