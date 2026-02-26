@@ -32,12 +32,12 @@ It uses GPT-4 / Claude / DeepSeek to systematically check a contract against **3
 
 The framework is organised into four phases, each substantially upgraded from the original baseline:
 
-| Phase | Name | What it does |
-|-------|------|-------------|
-| **1** | Data Pipeline | Fetches contracts from Etherscan, loads SmartBugs / SolidiFI benchmark datasets, generates 15 synthetic templates with semantic mutation operators, normalises source code (comment stripping, line-number annotation), and smart-chunks large contracts instead of blindly truncating them. |
-| **2** | LLM Engine | Builds structured prompts with a 4-section architecture (role, vulnerability context with examples, JSON output schema, line-numbered source). Supports *binary*, *non-binary*, *Chain-of-Thought*, and *multi-vuln batch* modes. A keyword relevance pre-filter eliminates irrelevant checks (~60–80 % fewer API calls). A self-consistency verification pass re-checks each finding with a sceptical prompt to cut false positives. Exponential-backoff retry handles transient API errors. |
-| **3** | Hyperparameter Tuning | `TuningConfig` dataclass with new fields (`verify`, `batch_vulns`, `use_filter`, `few_shot`). Predefined grid now includes GPT-4o, Claude-3-Opus, and DeepSeek-v3.2 at multiple temperatures, plus a multi-vuln batch config. |
-| **4** | Evaluation & UI | Full metric suite: Precision / Recall / F1 (micro & macro), AUC-ROC, PR-AUC, per-vulnerability-type breakdown, and confidence calibration. Batch experiment runner executes the entire config grid against a benchmark dataset. Report generator produces markdown / HTML audit reports. Results logger persists all runs for reproducibility. |
+| Phase | Name                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1** | Data Pipeline         | Fetches contracts from Etherscan, loads SmartBugs / SolidiFI benchmark datasets, generates 15 synthetic templates with semantic mutation operators, normalises source code (comment stripping, line-number annotation), and smart-chunks large contracts instead of blindly truncating them.                                                                                                                                                                                                  |
+| **2** | LLM Engine            | Builds structured prompts with a 4-section architecture (role, vulnerability context with examples, JSON output schema, line-numbered source). Supports _binary_, _non-binary_, _Chain-of-Thought_, and _multi-vuln batch_ modes. A keyword relevance pre-filter eliminates irrelevant checks (~60–80 % fewer API calls). A self-consistency verification pass re-checks each finding with a sceptical prompt to cut false positives. Exponential-backoff retry handles transient API errors. |
+| **3** | Hyperparameter Tuning | `TuningConfig` dataclass with new fields (`verify`, `batch_vulns`, `use_filter`, `few_shot`). Predefined grid now includes GPT-4o, Claude-3-Opus, and DeepSeek-v3.2 at multiple temperatures, plus a multi-vuln batch config.                                                                                                                                                                                                                                                                 |
+| **4** | Evaluation & UI       | Full metric suite: Precision / Recall / F1 (micro & macro), AUC-ROC, PR-AUC, per-vulnerability-type breakdown, and confidence calibration. Batch experiment runner executes the entire config grid against a benchmark dataset. Report generator produces markdown / HTML audit reports. Results logger persists all runs for reproducibility.                                                                                                                                                |
 
 ---
 
@@ -92,23 +92,24 @@ COMP5566_project_26022026/
 ## 3. Requirements
 
 - Python **3.10 or higher**
-- An **OpenAI API key** (GPT-4o) and/or **Anthropic API key** (Claude) and/or **DeepSeek API key**
+- A **GitHub Personal Access Token (PAT)** for GitHub Models (recommended)
+- (Optional) An **OpenAI API key** and/or **Anthropic API key** for direct provider access
 - (Optional) An **Etherscan API key** to scrape contracts directly from the blockchain
 
 Python dependencies (installed via `requirements.txt`):
 
-| Package | Purpose |
-|---------|---------|
-| `openai` | GPT-4o / GPT-4-turbo API |
-| `anthropic` | Claude API |
-| `tiktoken` | Token counting |
-| `streamlit` | Web UI |
-| `pandas` | Tabular results |
-| `scikit-learn` | AUC-ROC, PR-AUC, calibration |
-| `plotly` | Interactive charts in Streamlit |
-| `matplotlib` | Report plots |
-| `python-dotenv` | `.env` file loading |
-| `pytest` | Test runner |
+| Package         | Purpose                         |
+| --------------- | ------------------------------- |
+| `openai`        | GPT-4o / GPT-4-turbo API        |
+| `anthropic`     | Claude API                      |
+| `tiktoken`      | Token counting                  |
+| `streamlit`     | Web UI                          |
+| `pandas`        | Tabular results                 |
+| `scikit-learn`  | AUC-ROC, PR-AUC, calibration    |
+| `plotly`        | Interactive charts in Streamlit |
+| `matplotlib`    | Report plots                    |
+| `python-dotenv` | `.env` file loading             |
+| `pytest`        | Test runner                     |
 
 ---
 
@@ -135,12 +136,19 @@ Create a `.env` file in the project root (already in `.gitignore`):
 
 ```dotenv
 # ── API Keys ──────────────────────────────────────────────────────
-OPENAI_API_KEY=sk-...
+# GitHub Models (recommended): set your GitHub PAT here
+GITHUB_TOKEN=github_pat_xxx
+
+# Optional fallback for OpenAI direct access
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://models.github.ai/inference
+
+# Optional providers
 ANTHROPIC_API_KEY=sk-ant-...
 ETHERSCAN_API_KEY=...          # only needed for Etherscan scraping
 
 # ── LLM Settings ──────────────────────────────────────────────────
-DEFAULT_MODEL=gpt-4o           # gpt-4o | claude-3-opus-20240229 | deepseek-v3.2
+DEFAULT_MODEL=openai/o4-mini   # e.g. openai/o4-mini | openai/gpt-4o-mini | openai/gpt-4o | claude-3-opus-20240229
 TEMPERATURE=0                  # 0 = deterministic, 1 = more creative
 MAX_CONTEXT_TOKENS=32000
 API_PAUSE_SECONDS=13           # minimum pause between LLM calls
@@ -156,6 +164,22 @@ KEYWORD_PREFILTER_ENABLED=true
 BATCH_VULNS_PER_PROMPT=8
 FEW_SHOT_EXAMPLES=true
 ```
+
+### GitHub Models quick check
+
+This project supports the same client pattern as the GitHub sample:
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+   base_url="https://models.github.ai/inference",
+   api_key=os.environ["GITHUB_TOKEN"],
+)
+```
+
+If you update `.env`, restart your Python/Streamlit process so environment variables are reloaded.
 
 All settings can also be changed directly in `config.py`.
 
@@ -187,13 +211,13 @@ python main.py audit --contract path/to/MyContract.sol --temperature 0.3
 
 **Flags for `audit`:**
 
-| Flag | Values | Default | Description |
-|------|--------|---------|-------------|
-| `--contract` | file path | *(required)* | Path to the `.sol` file to audit |
-| `--mode` | `binary` \| `non_binary` \| `cot` \| `multi_vuln` | `non_binary` | Classification mode |
-| `--temperature` | `0.0` – `1.0` | from `config.py` | LLM sampling temperature |
-| `--output` | file path | *(stdout)* | Write JSON results to a file |
-| `--verify` | flag | `false` | Run two-pass self-check verification |
+| Flag            | Values                                            | Default          | Description                          |
+| --------------- | ------------------------------------------------- | ---------------- | ------------------------------------ |
+| `--contract`    | file path                                         | _(required)_     | Path to the `.sol` file to audit     |
+| `--mode`        | `binary` \| `non_binary` \| `cot` \| `multi_vuln` | `non_binary`     | Classification mode                  |
+| `--temperature` | `0.0` – `1.0`                                     | from `config.py` | LLM sampling temperature             |
+| `--output`      | file path                                         | _(stdout)_       | Write JSON results to a file         |
+| `--verify`      | flag                                              | `false`          | Run two-pass self-check verification |
 
 The JSON result contains:
 
@@ -214,6 +238,7 @@ python main.py generate-synthetic --num-vulns 15
 ```
 
 **Example output:**
+
 ```
 Generated 5 synthetic contracts in data/synthetic_contracts/
   SecureVault:   labels = ['Reentrancy']
@@ -266,7 +291,7 @@ Open **http://localhost:8501** in your browser.
 
 - **Paste or upload** a Solidity contract (`.sol` or `.json`).
 - Token count displayed automatically; oversized contracts truncated with a warning.
-- **Select vulnerability types** from all 38, or tick *"Run all 38"*.
+- **Select vulnerability types** from all 38, or tick _"Run all 38"_.
 - Choose **LLM model** (GPT-4o, Claude, DeepSeek, or custom) and **temperature** in the sidebar.
 - Click **🚀 Run Audit** — progress bar tracks each check.
 - Results shown as collapsible panels (🔴 flagged / 🟢 clean).
@@ -324,7 +349,7 @@ Each audit uses a **4-section structured prompt**:
 
 ### 8.2 Self-Check Verification
 
-When `--verify` is used, each candidate finding goes through a second *sceptical* pass:
+When `--verify` is used, each candidate finding goes through a second _sceptical_ pass:
 
 ```
 Pass 1 (Detect):  Standard audit → N candidate findings
@@ -348,15 +373,15 @@ Before sending a contract to the LLM, `relevance_filter.py` checks each vulnerab
 
 The evaluation suite computes:
 
-| Metric | Function |
-|--------|----------|
-| Precision / Recall / F1 (per contract) | `compute_metrics()` |
-| Per-vulnerability-type F1 breakdown | `compute_per_vuln_metrics()` |
-| Macro-F1 / Micro-F1 | `evaluate_batch()` |
-| AUC-ROC | `compute_auc_roc()` |
-| PR-AUC (better for imbalanced data) | `compute_pr_auc()` |
-| 38-row confusion matrix | `compute_confusion_matrix_per_type()` |
-| Confidence calibration | `compute_calibration()` |
+| Metric                                 | Function                              |
+| -------------------------------------- | ------------------------------------- |
+| Precision / Recall / F1 (per contract) | `compute_metrics()`                   |
+| Per-vulnerability-type F1 breakdown    | `compute_per_vuln_metrics()`          |
+| Macro-F1 / Micro-F1                    | `evaluate_batch()`                    |
+| AUC-ROC                                | `compute_auc_roc()`                   |
+| PR-AUC (better for imbalanced data)    | `compute_pr_auc()`                    |
+| 38-row confusion matrix                | `compute_confusion_matrix_per_type()` |
+| Confidence calibration                 | `compute_calibration()`               |
 
 ---
 
@@ -364,9 +389,9 @@ The evaluation suite computes:
 
 Each phase has its own detailed README:
 
-| Phase | README |
-|-------|--------|
-| Phase 1 – Data Pipeline | [`phase1_data_pipeline/README.md`](phase1_data_pipeline/README.md) |
-| Phase 2 – LLM Engine | [`phase2_llm_engine/README.md`](phase2_llm_engine/README.md) |
+| Phase                           | README                                                               |
+| ------------------------------- | -------------------------------------------------------------------- |
+| Phase 1 – Data Pipeline         | [`phase1_data_pipeline/README.md`](phase1_data_pipeline/README.md)   |
+| Phase 2 – LLM Engine            | [`phase2_llm_engine/README.md`](phase2_llm_engine/README.md)         |
 | Phase 3 – Hyperparameter Tuning | [`phase3_hyperparameter/README.md`](phase3_hyperparameter/README.md) |
-| Phase 4 – Evaluation & UI | [`phase4_evaluation/README.md`](phase4_evaluation/README.md) |
+| Phase 4 – Evaluation & UI       | [`phase4_evaluation/README.md`](phase4_evaluation/README.md)         |
