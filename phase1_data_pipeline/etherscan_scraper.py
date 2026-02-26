@@ -68,7 +68,7 @@ def scrape_contracts(addresses: list[str], pause: float = 0.3) -> list[dict]:
             if record:
                 record["address"] = addr
                 results.append(record)
-        except Exception as exc:  # noqa: BLE001
+        except requests.RequestException as exc:  # noqa: BLE001
             print(f"[scraper] Failed for {addr}: {exc}")
         time.sleep(pause)
     return results

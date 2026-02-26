@@ -12,19 +12,6 @@ import tiktoken
 _CHARS_PER_TOKEN = 4
 
 
-def _simple_encode(text: str):
-    """Minimal fallback tokenizer: split on whitespace and punctuation boundaries."""
-    # Return a list-like object with len() = estimated token count
-    # Rough estimate: 1 token ≈ 4 characters
-    count = max(1, len(text) // _CHARS_PER_TOKEN) if text else 0
-    return list(range(count))
-
-
-def _simple_decode(tokens) -> str:
-    """Not meaningful for the fallback – returns empty string."""
-    return ""
-
-
 class _FallbackEncoding:
     """Mimics the tiktoken Encoding interface with a character-based estimator."""
 
