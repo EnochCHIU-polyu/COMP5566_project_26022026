@@ -29,11 +29,19 @@ class TuningConfig:
         Sampling temperature.  Use 0 for deterministic output; 1 for more
         creative / diverse responses.
     mode : str
-        ``"binary"`` or ``"non_binary"`` or ``"cot"``.
+        ``"binary"``, ``"non_binary"``, ``"cot"``, or ``"multi_vuln"``.
     max_tokens : int
         Maximum response tokens.
     notes : str
         Optional free-text notes about this configuration.
+    verify : bool
+        If True, run self-check verification pass on findings.
+    batch_vulns : int
+        Number of vulnerability types to batch into a single prompt (1 = one at a time).
+    use_filter : bool
+        If True, apply keyword relevance filter before auditing.
+    few_shot : bool
+        If True, use few-shot prompting with examples.
     """
 
     name: str
@@ -42,6 +50,10 @@ class TuningConfig:
     mode: str = "non_binary"
     max_tokens: int = 2048
     notes: str = ""
+    verify: bool = False
+    batch_vulns: int = 1
+    use_filter: bool = True
+    few_shot: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +102,27 @@ DEFAULT_EXPERIMENT_GRID: list[TuningConfig] = [
         temperature=1.0,
         mode="non_binary",
         notes="Claude creative non-binary",
+    ),
+    TuningConfig(
+        name="T0-deepseek-binary",
+        model="deepseek-v3.2",
+        temperature=0.0,
+        mode="binary",
+        notes="DeepSeek deterministic binary scan",
+    ),
+    TuningConfig(
+        name="T0-deepseek-nonbinary",
+        model="deepseek-v3.2",
+        temperature=0.0,
+        mode="non_binary",
+        notes="DeepSeek deterministic non-binary analysis",
+    ),
+    TuningConfig(
+        name="T0-gpt4o-multivuln",
+        model="gpt-4o",
+        temperature=0.0,
+        mode="multi_vuln",
+        notes="GPT-4o multi-vulnerability batch mode",
     ),
 ]
 
