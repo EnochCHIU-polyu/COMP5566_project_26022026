@@ -6,6 +6,7 @@ Run with:
 
 Features:
 - Upload or paste a Solidity contract.
+- Enter API keys locally (stored only in the browser session – never written to disk).
 - Select vulnerability type(s) and classification mode.
 - Call the LLM and display results.
 - Highlight the specific lines flagged by the LLM so auditors can verify quickly.
@@ -27,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import streamlit as st
 import pandas as pd
 
-from config import DEFAULT_MODEL, TEMPERATURE, CLASSIFICATION_MODE
+from config import DEFAULT_MODEL, TEMPERATURE, CLASSIFICATION_MODE, OPENAI_API_KEY, ANTHROPIC_API_KEY
 from phase1_data_pipeline.token_counter import count_tokens
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
@@ -45,6 +46,26 @@ st.set_page_config(
     layout="wide",
 )
 
+# ---------------------------------------------------------------------------
+# Custom CSS for a cleaner look
+# ---------------------------------------------------------------------------
+
+st.markdown(
+    """
+    <style>
+    /* Tighten the sidebar */
+    section[data-testid="stSidebar"] > div { padding-top: 1rem; }
+    /* Card-like expanders */
+    div[data-testid="stExpander"] { border: 1px solid #2d2d2d; border-radius: 8px; margin-bottom: 0.5rem; }
+    /* Subtle metric boxes */
+    div[data-testid="stMetric"] { background: #1a1a2e; border-radius: 6px; padding: 0.4rem 0.6rem; }
+    /* Primary button */
+    button[kind="primary"] { width: 100%; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("🔐 Smart Contract Vulnerability Auditor")
 st.caption(
     "Human-in-the-Loop interface for LLM-assisted smart contract security auditing."
@@ -57,6 +78,36 @@ st.caption(
 with st.sidebar:
     st.header("⚙️ Configuration")
 
+    # ── API Keys ──────────────────────────────────────────────────────────────
+    with st.expander("🔑 API Keys", expanded=not bool(OPENAI_API_KEY or ANTHROPIC_API_KEY)):
+        st.caption(
+            "Keys are stored **only** in your browser session and are never written to disk. "
+            "Leave blank to use the value from your `.env` file."
+        )
+        ui_openai_key = st.text_input(
+            "OpenAI API Key",
+            type="password",
+            value="",
+            placeholder="sk-…  (leave blank to use .env)",
+            key="openai_key_input",
+        )
+        ui_anthropic_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            value="",
+            placeholder="sk-ant-…  (leave blank to use .env)",
+            key="anthropic_key_input",
+        )
+
+    # Resolve the effective key: UI input takes priority over env/config value
+    effective_openai_key: str = ui_openai_key.strip() or OPENAI_API_KEY
+    effective_anthropic_key: str = ui_anthropic_key.strip() or ANTHROPIC_API_KEY
+
+    st.markdown("---")
+
+    # ── Model & inference settings ────────────────────────────────────────────
+    st.subheader("🤖 Model Settings")
+
     model_choice = st.selectbox(
         "LLM Model",
         [
@@ -67,6 +118,7 @@ with st.sidebar:
             "claude-3-sonnet-20240229",
         ],
         index=0,
+        help="OpenAI models require an OpenAI key; Claude models require an Anthropic key.",
     )
 
     temperature = st.slider(
@@ -75,18 +127,29 @@ with st.sidebar:
         max_value=1.0,
         value=float(TEMPERATURE),
         step=0.1,
-        help="0 = deterministic, 1 = more creative",
+        help="0 = deterministic, 1 = more creative / random",
     )
 
     mode = st.radio(
         "Classification Mode",
         ["binary", "non_binary"],
         index=0 if CLASSIFICATION_MODE == "binary" else 1,
-        help="Binary = YES/NO; Non-Binary = detailed explanation",
+        format_func=lambda m: "Binary (YES / NO)" if m == "binary" else "Non-Binary (detailed)",
+        help="Binary = fast YES/NO; Non-Binary = full explanation",
     )
 
+    # Warn if the selected model has no key
+    if model_choice.startswith("claude") and not effective_anthropic_key:
+        st.warning("⚠️ No Anthropic API key provided.")
+    elif not model_choice.startswith("claude") and not effective_openai_key:
+        st.warning("⚠️ No OpenAI API key provided.")
+    else:
+        st.success("✅ API key configured")
+
     st.markdown("---")
-    st.header("📊 Scoring Dashboard")
+
+    # ── Scoring Dashboard ─────────────────────────────────────────────────────
+    st.subheader("📊 Scoring Dashboard")
     if "score_history" not in st.session_state:
         st.session_state.score_history = []
 
@@ -96,6 +159,7 @@ with st.sidebar:
         tn = sum(r["tn"] for r in st.session_state.score_history)
         fn = sum(r["fn"] for r in st.session_state.score_history)
         metrics = compute_metrics(tp, fp, tn, fn)
+
         col1, col2 = st.columns(2)
         with col1:
             st.metric("TP", tp)
@@ -103,12 +167,16 @@ with st.sidebar:
         with col2:
             st.metric("TN", tn)
             st.metric("FN", fn)
+
         st.metric("F1 Score", f"{metrics['f1']:.4f}")
         st.metric("Precision", f"{metrics['precision']:.4f}")
         st.metric("Recall", f"{metrics['recall']:.4f}")
-        if st.button("Clear History"):
+
+        if st.button("🗑️ Clear History"):
             st.session_state.score_history = []
             st.rerun()
+    else:
+        st.info("No evaluations recorded yet.")
 
 # ---------------------------------------------------------------------------
 # Main area – contract input
@@ -146,7 +214,7 @@ source_code = source_code_input
 
 if source_code:
     token_count = count_tokens(source_code, model_choice)
-    st.info(f"Token count: **{token_count:,}**")
+    st.info(f"📏 Token count: **{token_count:,}**")
     preprocessed = preprocess_contract(source_code, model=model_choice)
     if preprocessed["truncated"]:
         st.warning(
@@ -161,14 +229,20 @@ if source_code:
 
 st.subheader("🔍 Vulnerability Selection")
 
+col_sel, col_all = st.columns([4, 1])
 vuln_names = [v["name"] for v in VULNERABILITY_TYPES]
-selected_vulns = st.multiselect(
-    "Select vulnerability types to check:",
-    vuln_names,
-    default=vuln_names[:5],
-)
 
-run_all = st.checkbox("Run all 38 vulnerability types", value=False)
+with col_all:
+    run_all = st.checkbox("Select all", value=False)
+
+with col_sel:
+    selected_vulns = st.multiselect(
+        "Select vulnerability types to check:",
+        vuln_names,
+        default=vuln_names[:5],
+        disabled=run_all,
+    )
+
 if run_all:
     selected_vulns = vuln_names
 
@@ -176,7 +250,27 @@ if run_all:
 # Audit button
 # ---------------------------------------------------------------------------
 
-if st.button("🚀 Run Audit", type="primary", disabled=not source_code):
+# Determine the effective API key for the chosen model
+_active_api_key = effective_anthropic_key if model_choice.startswith("claude") else effective_openai_key
+
+col_run, col_clear = st.columns([3, 1])
+with col_run:
+    run_disabled = not source_code or not _active_api_key
+    run_help = "Provide source code and an API key to run the audit." if run_disabled else None
+    run_audit = st.button(
+        "🚀 Run Audit",
+        type="primary",
+        disabled=run_disabled,
+        help=run_help,
+        use_container_width=True,
+    )
+with col_clear:
+    if st.button("🧹 Clear Results", use_container_width=True):
+        st.session_state.pop("last_results", None)
+        st.session_state.pop("last_source", None)
+        st.rerun()
+
+if run_audit:
     if not selected_vulns:
         st.error("Please select at least one vulnerability type.")
     else:
@@ -186,7 +280,7 @@ if st.button("🚀 Run Audit", type="primary", disabled=not source_code):
 
         for i, vuln_name in enumerate(selected_vulns):
             vuln = next(v for v in VULNERABILITY_TYPES if v["name"] == vuln_name)
-            status_text.text(f"Checking: {vuln_name} ({i+1}/{len(selected_vulns)})")
+            status_text.text(f"Checking: {vuln_name} ({i + 1}/{len(selected_vulns)})")
             messages = build_prompt(
                 source_code=source_code,
                 vuln_name=vuln["name"],
@@ -194,7 +288,12 @@ if st.button("🚀 Run Audit", type="primary", disabled=not source_code):
                 mode=mode,
             )
             try:
-                response = query_llm(messages, model=model_choice, temperature=temperature)
+                response = query_llm(
+                    messages,
+                    model=model_choice,
+                    temperature=temperature,
+                    api_key=_active_api_key or None,
+                )
             except Exception as exc:  # noqa: BLE001
                 response = f"ERROR: {exc}"
             results.append({"vuln_name": vuln_name, "response": response})
@@ -213,16 +312,21 @@ if "last_results" in st.session_state:
     results = st.session_state.last_results
     source = st.session_state.last_source
 
+    # Summary bar
+    n_flagged = sum(1 for r in results if _is_vulnerability_flagged(r["response"]))
+    n_total = len(results)
+    if n_flagged:
+        st.error(f"🔴 {n_flagged} / {n_total} vulnerability type(s) flagged")
+    else:
+        st.success(f"🟢 No vulnerabilities detected across {n_total} check(s)")
+
     for r in results:
-        is_vuln = r["response"].strip().upper().startswith("YES") or (
-            "YES" in r["response"][:20].upper()
-        )
+        is_vuln = _is_vulnerability_flagged(r["response"])
         icon = "🔴" if is_vuln else "🟢"
         with st.expander(f"{icon} {r['vuln_name']}", expanded=is_vuln):
             st.write(r["response"])
 
             # ── Highlight flagged lines ──────────────────────────────────────
-            # Extract line numbers or function names from the response
             flagged_lines = _extract_flagged_lines(r["response"], source)
             if flagged_lines:
                 st.markdown("**🔦 Flagged lines:**")
@@ -233,23 +337,28 @@ if "last_results" in st.session_state:
             st.markdown("**✅ Human Verification:**")
             col1, col2, col3 = st.columns(3)
             with col1:
-                if st.button("True Positive", key=f"tp_{r['vuln_name']}"):
+                if st.button("✔️ True Positive", key=f"tp_{r['vuln_name']}"):
                     st.session_state.score_history.append(
                         {"tp": 1, "fp": 0, "tn": 0, "fn": 0}
                     )
                     st.success("Recorded as True Positive")
             with col2:
-                if st.button("False Positive", key=f"fp_{r['vuln_name']}"):
+                if st.button("✖️ False Positive", key=f"fp_{r['vuln_name']}"):
                     st.session_state.score_history.append(
                         {"tp": 0, "fp": 1, "tn": 0, "fn": 0}
                     )
                     st.info("Recorded as False Positive")
             with col3:
-                if st.button("False Negative", key=f"fn_{r['vuln_name']}"):
+                if st.button("⚠️ False Negative", key=f"fn_{r['vuln_name']}"):
                     st.session_state.score_history.append(
                         {"tp": 0, "fp": 0, "tn": 0, "fn": 1}
                     )
                     st.warning("Recorded as False Negative")
+
+
+def _is_vulnerability_flagged(response: str) -> bool:
+    """Return True when the LLM response indicates a vulnerability was detected."""
+    return response.strip().upper().startswith("YES") or "YES" in response[:20].upper()
 
 
 def _extract_flagged_lines(response: str, source_code: str) -> list[int]:

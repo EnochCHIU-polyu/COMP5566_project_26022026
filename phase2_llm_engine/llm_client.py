@@ -31,18 +31,32 @@ _openai_client = None
 _anthropic_client = None
 
 
-def _get_openai_client():
-    """Return a cached, configured openai.OpenAI client."""
+def _get_openai_client(api_key: Optional[str] = None):
+    """Return a configured openai.OpenAI client.
+
+    If *api_key* is provided a fresh client is created with that key;
+    otherwise a cached client backed by the environment variable is returned.
+    """
     global _openai_client
+    if api_key:
+        import openai  # noqa: PLC0415
+        return openai.OpenAI(api_key=api_key)
     if _openai_client is None:
         import openai  # noqa: PLC0415
         _openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
     return _openai_client
 
 
-def _get_anthropic_client():
-    """Return a cached, configured anthropic.Anthropic client."""
+def _get_anthropic_client(api_key: Optional[str] = None):
+    """Return a configured anthropic.Anthropic client.
+
+    If *api_key* is provided a fresh client is created with that key;
+    otherwise a cached client backed by the environment variable is returned.
+    """
     global _anthropic_client
+    if api_key:
+        import anthropic  # noqa: PLC0415
+        return anthropic.Anthropic(api_key=api_key)
     if _anthropic_client is None:
         import anthropic  # noqa: PLC0415
         _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -76,6 +90,7 @@ def query_llm(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: int = 2048,
+    api_key: Optional[str] = None,
 ) -> str:
     """
     Send *messages* to the specified LLM and return the text response.
@@ -93,6 +108,10 @@ def query_llm(
         Override the default temperature from config.
     max_tokens : int
         Maximum tokens in the model's response.
+    api_key : str, optional
+        API key to use for this call.  Overrides the environment-variable key
+        loaded at startup.  Useful when the key is supplied at runtime (e.g.
+        via a UI).
 
     Returns
     -------
@@ -105,8 +124,8 @@ def query_llm(
     temperature = temperature if temperature is not None else TEMPERATURE
 
     if model.startswith("claude"):
-        return _query_anthropic(messages, model, temperature, max_tokens)
-    return _query_openai(messages, model, temperature, max_tokens)
+        return _query_anthropic(messages, model, temperature, max_tokens, api_key=api_key)
+    return _query_openai(messages, model, temperature, max_tokens, api_key=api_key)
 
 
 def _query_openai(
@@ -114,8 +133,9 @@ def _query_openai(
     model: str,
     temperature: float,
     max_tokens: int,
+    api_key: Optional[str] = None,
 ) -> str:
-    client = _get_openai_client()
+    client = _get_openai_client(api_key=api_key)
     response = client.chat.completions.create(
         model=model,
         messages=messages,
@@ -130,8 +150,9 @@ def _query_anthropic(
     model: str,
     temperature: float,
     max_tokens: int,
+    api_key: Optional[str] = None,
 ) -> str:
-    client = _get_anthropic_client()
+    client = _get_anthropic_client(api_key=api_key)
     # Anthropic separates system prompt from user messages
     system_content = ""
     chat_messages = []
