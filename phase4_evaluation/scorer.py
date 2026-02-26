@@ -7,6 +7,7 @@ for a batch of audit results against ground-truth labels.
 
 from __future__ import annotations
 
+import re
 import logging
 from typing import Optional
 
@@ -26,11 +27,10 @@ def _parse_binary_response(response: str) -> Optional[bool]:
     if text.startswith("NO"):
         return False
     # Fallback: search for YES/NO as whole words in the first 20 characters
-    import re as _re
     snippet = text[:20]
-    if _re.search(r"\bYES\b", snippet):
+    if re.search(r"\bYES\b", snippet):
         return True
-    if _re.search(r"\bNO\b", snippet):
+    if re.search(r"\bNO\b", snippet):
         return False
     return None
 

@@ -116,6 +116,8 @@ with st.sidebar:
 
 tab_paste, tab_upload = st.tabs(["📝 Paste Code", "📂 Upload File"])
 
+source_code_input = ""
+
 with tab_paste:
     source_code_input = st.text_area(
         "Paste Solidity source code here:",
@@ -136,7 +138,7 @@ with tab_upload:
         else:
             source_code_input = raw
 
-source_code = source_code_input if "source_code_input" in dir() else ""
+source_code = source_code_input
 
 # ---------------------------------------------------------------------------
 # Token count + preprocessing

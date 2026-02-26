@@ -37,9 +37,11 @@ def _run_audit(args: argparse.Namespace) -> None:
 
     preprocessed = preprocess_contract(raw_source)
     if preprocessed["truncated"]:
+        from phase1_data_pipeline.token_counter import count_tokens
+        original_count = count_tokens(raw_source)
         logger.warning(
             "Contract was truncated (%d → %d tokens).",
-            preprocessed["token_count"],  # after truncation
+            original_count,
             preprocessed["token_count"],
         )
 

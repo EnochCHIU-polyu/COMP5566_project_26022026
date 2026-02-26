@@ -24,19 +24,29 @@ from config import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Lazy imports – only import what the user actually needs
+# Lazy imports – only import what the user actually needs, cached per process
 # ---------------------------------------------------------------------------
 
+_openai_client = None
+_anthropic_client = None
+
+
 def _get_openai_client():
-    """Return a configured openai.OpenAI client."""
-    import openai  # noqa: PLC0415
-    return openai.OpenAI(api_key=OPENAI_API_KEY)
+    """Return a cached, configured openai.OpenAI client."""
+    global _openai_client
+    if _openai_client is None:
+        import openai  # noqa: PLC0415
+        _openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 
 
 def _get_anthropic_client():
-    """Return a configured anthropic.Anthropic client."""
-    import anthropic  # noqa: PLC0415
-    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    """Return a cached, configured anthropic.Anthropic client."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        import anthropic  # noqa: PLC0415
+        _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    return _anthropic_client
 
 
 # ---------------------------------------------------------------------------

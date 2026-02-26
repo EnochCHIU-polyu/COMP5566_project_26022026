@@ -31,7 +31,8 @@ class _FallbackEncoding:
     def encode(self, text: str):
         if not text:
             return []
-        return list(range(max(1, len(text) // _CHARS_PER_TOKEN)))
+        # Return a minimal object whose len() equals the estimated token count
+        return range(max(1, len(text) // _CHARS_PER_TOKEN))
 
     def decode(self, tokens) -> str:
         # Cannot reverse the estimator; callers that need decode use tiktoken directly
