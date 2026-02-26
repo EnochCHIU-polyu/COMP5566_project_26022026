@@ -154,7 +154,7 @@ def download_smartbugs(output_dir: Optional[str] = None) -> list[dict]:
                     source_code = f.read()
 
                 vuln_type = SMARTBUGS_CATEGORY_MAP.get(category, category)
-    contract_id = hashlib.sha256(source_code.encode()).hexdigest()[:12]
+                contract_id = hashlib.sha256(source_code.encode()).hexdigest()[:12]
                 contracts.append(_make_contract_record(
                     contract_id=f"sb_{contract_id}",
                     name=filename.replace('.sol', ''),
