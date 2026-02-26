@@ -425,3 +425,576 @@ def save_synthetic_contracts(contracts: list[dict], directory: str = SYNTHETIC_C
         filepath = os.path.join(directory, f"{contract['name']}.json")
         with open(filepath, "w", encoding="utf-8") as fh:
             json.dump(contract, fh, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Additional secure contract templates (10 more)
+# ---------------------------------------------------------------------------
+
+_EXTRA_SECURE_TEMPLATES: list[dict] = [
+    {
+        "name": "ProxyContract",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/// @title ProxyContract – EIP-1967 upgradeable proxy.
+contract ProxyContract {
+    bytes32 internal constant IMPL_SLOT =
+        bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1);
+
+    constructor(address impl) {
+        assembly { sstore(IMPL_SLOT, impl) }
+    }
+
+    function _implementation() internal view returns (address impl) {
+        assembly { impl := sload(IMPL_SLOT) }
+    }
+
+    fallback() external payable {
+        address impl = _implementation();
+        assembly {
+            calldatacopy(0, 0, calldatasize())
+            let result := delegatecall(gas(), impl, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            switch result
+            case 0 { revert(0, returndatasize()) }
+            default { return(0, returndatasize()) }
+        }
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "DEXRouter",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC20 {
+    function transferFrom(address, address, uint256) external returns (bool);
+    function transfer(address, uint256) external returns (bool);
+    function balanceOf(address) external view returns (uint256);
+}
+
+/// @title DEXRouter – minimal token swap router.
+contract DEXRouter {
+    mapping(address => mapping(address => uint256)) public reserves;
+
+    function addLiquidity(address tokenA, address tokenB, uint256 amtA, uint256 amtB) external {
+        IERC20(tokenA).transferFrom(msg.sender, address(this), amtA);
+        IERC20(tokenB).transferFrom(msg.sender, address(this), amtB);
+        reserves[tokenA][tokenB] += amtA;
+        reserves[tokenB][tokenA] += amtB;
+    }
+
+    function swap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minAmountOut
+    ) external returns (uint256 amountOut) {
+        uint256 reserveIn = reserves[tokenIn][tokenOut];
+        uint256 reserveOut = reserves[tokenOut][tokenIn];
+        amountOut = (amountIn * reserveOut) / (reserveIn + amountIn);
+        require(amountOut >= minAmountOut, "Slippage exceeded");
+        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+        IERC20(tokenOut).transfer(msg.sender, amountOut);
+        reserves[tokenIn][tokenOut] += amountIn;
+        reserves[tokenOut][tokenIn] -= amountOut;
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "LendingPool",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC20 {
+    function transferFrom(address, address, uint256) external returns (bool);
+    function transfer(address, uint256) external returns (bool);
+}
+
+/// @title LendingPool – Aave-like lending pool.
+contract LendingPool {
+    mapping(address => uint256) public deposits;
+    mapping(address => uint256) public borrows;
+    address public token;
+    uint256 public constant COLLATERAL_FACTOR = 75; // 75%
+
+    constructor(address _token) {
+        token = _token;
+    }
+
+    function deposit(uint256 amount) external {
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        deposits[msg.sender] += amount;
+    }
+
+    function borrow(uint256 amount) external {
+        uint256 maxBorrow = deposits[msg.sender] * COLLATERAL_FACTOR / 100;
+        require(borrows[msg.sender] + amount <= maxBorrow, "Undercollateralized");
+        borrows[msg.sender] += amount;
+        IERC20(token).transfer(msg.sender, amount);
+    }
+
+    function repay(uint256 amount) external {
+        require(borrows[msg.sender] >= amount, "Overpayment");
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        borrows[msg.sender] -= amount;
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "GovernanceContract",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/// @title GovernanceContract – on-chain governance.
+contract GovernanceContract {
+    struct Proposal {
+        bytes callData;
+        address target;
+        uint256 voteEnd;
+        uint256 votesFor;
+        uint256 votesAgainst;
+        bool executed;
+    }
+
+    mapping(uint256 => Proposal) public proposals;
+    mapping(address => uint256) public votingPower;
+    mapping(uint256 => mapping(address => bool)) public hasVoted;
+    uint256 public proposalCount;
+
+    function propose(address target, bytes calldata data, uint256 duration)
+        external returns (uint256 id)
+    {
+        id = ++proposalCount;
+        proposals[id] = Proposal(data, target, block.timestamp + duration, 0, 0, false);
+    }
+
+    function vote(uint256 id, bool support) external {
+        Proposal storage p = proposals[id];
+        require(block.timestamp <= p.voteEnd, "Voting closed");
+        require(!hasVoted[id][msg.sender], "Already voted");
+        hasVoted[id][msg.sender] = true;
+        uint256 power = votingPower[msg.sender];
+        if (support) p.votesFor += power;
+        else p.votesAgainst += power;
+    }
+
+    function execute(uint256 id) external {
+        Proposal storage p = proposals[id];
+        require(block.timestamp > p.voteEnd, "Voting ongoing");
+        require(!p.executed, "Already executed");
+        require(p.votesFor > p.votesAgainst, "Proposal rejected");
+        p.executed = true;
+        (bool ok,) = p.target.call(p.callData);
+        require(ok, "Execution failed");
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "NFTMarketplace",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC721 {
+    function transferFrom(address, address, uint256) external;
+    function ownerOf(uint256) external view returns (address);
+}
+
+/// @title NFTMarketplace – simple NFT buy/sell.
+contract NFTMarketplace {
+    struct Listing {
+        address seller;
+        uint256 price;
+        bool active;
+    }
+
+    mapping(address => mapping(uint256 => Listing)) public listings;
+
+    function list(address nft, uint256 tokenId, uint256 price) external {
+        require(IERC721(nft).ownerOf(tokenId) == msg.sender, "Not owner");
+        listings[nft][tokenId] = Listing(msg.sender, price, true);
+    }
+
+    function buy(address nft, uint256 tokenId) external payable {
+        Listing storage l = listings[nft][tokenId];
+        require(l.active, "Not listed");
+        require(msg.value >= l.price, "Insufficient payment");
+        l.active = false;
+        IERC721(nft).transferFrom(l.seller, msg.sender, tokenId);
+        (bool ok,) = l.seller.call{value: l.price}("");
+        require(ok, "Payment failed");
+        if (msg.value > l.price) {
+            (bool refund,) = msg.sender.call{value: msg.value - l.price}("");
+            require(refund, "Refund failed");
+        }
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "FlashLoanReceiver",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC3156FlashLender {
+    function flashLoan(address receiver, address token, uint256 amount, bytes calldata data)
+        external returns (bool);
+}
+
+interface IERC20 {
+    function approve(address, uint256) external returns (bool);
+    function transfer(address, uint256) external returns (bool);
+    function balanceOf(address) external view returns (uint256);
+}
+
+/// @title FlashLoanReceiver – ERC-3156 flash loan receiver.
+contract FlashLoanReceiver {
+    address public owner;
+
+    constructor() { owner = msg.sender; }
+
+    function onFlashLoan(
+        address initiator,
+        address token,
+        uint256 amount,
+        uint256 fee,
+        bytes calldata
+    ) external returns (bytes32) {
+        require(initiator == address(this), "Untrusted initiator");
+        // Custom logic here (arbitrage, liquidation, etc.)
+        uint256 repayAmount = amount + fee;
+        IERC20(token).approve(msg.sender, repayAmount);
+        return keccak256("ERC3156FlashBorrower.onFlashLoan");
+    }
+
+    function executeFlashLoan(
+        address lender,
+        address token,
+        uint256 amount
+    ) external {
+        require(msg.sender == owner, "Not owner");
+        IERC3156FlashLender(lender).flashLoan(address(this), token, amount, "");
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "StablecoinMinter",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/// @title StablecoinMinter – overcollateralised stablecoin.
+contract StablecoinMinter {
+    mapping(address => uint256) public collateral;
+    mapping(address => uint256) public minted;
+    uint256 public constant MIN_RATIO = 150; // 150% collateral
+    uint256 public totalSupply;
+    mapping(address => uint256) public balances;
+
+    function depositCollateral() external payable {
+        collateral[msg.sender] += msg.value;
+    }
+
+    function mint(uint256 amount) external {
+        uint256 required = amount * MIN_RATIO / 100;
+        require(collateral[msg.sender] >= required + minted[msg.sender] * MIN_RATIO / 100,
+            "Undercollateralised");
+        minted[msg.sender] += amount;
+        totalSupply += amount;
+        balances[msg.sender] += amount;
+    }
+
+    function burn(uint256 amount) external {
+        require(balances[msg.sender] >= amount, "Insufficient balance");
+        balances[msg.sender] -= amount;
+        totalSupply -= amount;
+        minted[msg.sender] -= amount;
+    }
+
+    function withdrawCollateral(uint256 amount) external {
+        uint256 minCollateral = minted[msg.sender] * MIN_RATIO / 100;
+        require(collateral[msg.sender] - amount >= minCollateral, "Would undercollateralise");
+        collateral[msg.sender] -= amount;
+        (bool ok,) = msg.sender.call{value: amount}("");
+        require(ok, "Transfer failed");
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "YieldFarm",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC20 {
+    function transferFrom(address, address, uint256) external returns (bool);
+    function transfer(address, uint256) external returns (bool);
+}
+
+/// @title YieldFarm – simple yield farming contract.
+contract YieldFarm {
+    IERC20 public stakingToken;
+    IERC20 public rewardToken;
+    uint256 public rewardRate;
+    mapping(address => uint256) public staked;
+    mapping(address => uint256) public lastUpdate;
+    mapping(address => uint256) public rewards;
+
+    constructor(address _staking, address _reward, uint256 _rate) {
+        stakingToken = IERC20(_staking);
+        rewardToken = IERC20(_reward);
+        rewardRate = _rate;
+    }
+
+    function _earned(address user) internal view returns (uint256) {
+        return staked[user] * rewardRate * (block.timestamp - lastUpdate[user]) / 1e18;
+    }
+
+    function stake(uint256 amount) external {
+        rewards[msg.sender] += _earned(msg.sender);
+        lastUpdate[msg.sender] = block.timestamp;
+        stakingToken.transferFrom(msg.sender, address(this), amount);
+        staked[msg.sender] += amount;
+    }
+
+    function unstake(uint256 amount) external {
+        require(staked[msg.sender] >= amount, "Insufficient stake");
+        rewards[msg.sender] += _earned(msg.sender);
+        lastUpdate[msg.sender] = block.timestamp;
+        staked[msg.sender] -= amount;
+        stakingToken.transfer(msg.sender, amount);
+    }
+
+    function claimRewards() external {
+        uint256 reward = rewards[msg.sender] + _earned(msg.sender);
+        rewards[msg.sender] = 0;
+        lastUpdate[msg.sender] = block.timestamp;
+        rewardToken.transfer(msg.sender, reward);
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "TimelockController",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/// @title TimelockController – timelock for governance actions.
+contract TimelockController {
+    uint256 public delay;
+    address public admin;
+    mapping(bytes32 => uint256) public queue;
+
+    event Queued(bytes32 indexed txId, address target, bytes data, uint256 eta);
+    event Executed(bytes32 indexed txId);
+    event Cancelled(bytes32 indexed txId);
+
+    constructor(uint256 _delay) {
+        delay = _delay;
+        admin = msg.sender;
+    }
+
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "Not admin");
+        _;
+    }
+
+    function queueTransaction(address target, bytes calldata data)
+        external onlyAdmin returns (bytes32 txId)
+    {
+        uint256 eta = block.timestamp + delay;
+        txId = keccak256(abi.encode(target, data, eta));
+        require(queue[txId] == 0, "Already queued");
+        queue[txId] = eta;
+        emit Queued(txId, target, data, eta);
+    }
+
+    function executeTransaction(address target, bytes calldata data, uint256 eta)
+        external onlyAdmin
+    {
+        bytes32 txId = keccak256(abi.encode(target, data, eta));
+        require(queue[txId] != 0, "Not queued");
+        require(block.timestamp >= eta, "Too early");
+        delete queue[txId];
+        (bool ok,) = target.call(data);
+        require(ok, "Execution failed");
+        emit Executed(txId);
+    }
+
+    function cancel(bytes32 txId) external onlyAdmin {
+        require(queue[txId] != 0, "Not queued");
+        delete queue[txId];
+        emit Cancelled(txId);
+    }
+}
+""",
+        "labels": [],
+    },
+    {
+        "name": "MultiTokenVault",
+        "source_code": """\
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC20 {
+    function transferFrom(address, address, uint256) external returns (bool);
+    function transfer(address, uint256) external returns (bool);
+    function balanceOf(address) external view returns (uint256);
+}
+
+/// @title MultiTokenVault – ERC-4626-like multi-token vault.
+contract MultiTokenVault {
+    mapping(address => mapping(address => uint256)) public shares; // token => user => shares
+    mapping(address => uint256) public totalShares; // token => total shares
+    mapping(address => address[]) public depositors; // token => list of depositors
+
+    function deposit(address token, uint256 amount) external returns (uint256 sharesOut) {
+        uint256 totalAssets = IERC20(token).balanceOf(address(this));
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        if (totalShares[token] == 0) {
+            sharesOut = amount;
+        } else {
+            sharesOut = amount * totalShares[token] / totalAssets;
+        }
+        shares[token][msg.sender] += sharesOut;
+        totalShares[token] += sharesOut;
+    }
+
+    function withdraw(address token, uint256 sharesIn) external returns (uint256 amountOut) {
+        require(shares[token][msg.sender] >= sharesIn, "Insufficient shares");
+        uint256 totalAssets = IERC20(token).balanceOf(address(this));
+        amountOut = sharesIn * totalAssets / totalShares[token];
+        shares[token][msg.sender] -= sharesIn;
+        totalShares[token] -= sharesIn;
+        IERC20(token).transfer(msg.sender, amountOut);
+    }
+}
+""",
+        "labels": [],
+    },
+]
+
+# Semantic mutation patches for extra templates
+_EXTRA_VULN_PATCHES: list[dict] = [
+    {
+        "id": 101,
+        "vuln_name": "Reentrancy in NFTMarketplace",
+        "target": "NFTMarketplace",
+        "find": (
+            "        l.active = false;\n"
+            "        IERC721(nft).transferFrom(l.seller, msg.sender, tokenId);\n"
+            "        (bool ok,) = l.seller.call{value: l.price}(\"\");"
+        ),
+        "replace": (
+            "        // BUG: state cleared after external call → reentrancy\n"
+            "        IERC721(nft).transferFrom(l.seller, msg.sender, tokenId);\n"
+            "        (bool ok,) = l.seller.call{value: l.price}(\"\");\n"
+            "        l.active = false;"
+        ),
+    },
+    {
+        "id": 102,
+        "vuln_name": "Access Control Missing in GovernanceContract",
+        "target": "GovernanceContract",
+        "find": (
+            "    function propose(address target, bytes calldata data, uint256 duration)\n"
+            "        external returns (uint256 id)"
+        ),
+        "replace": (
+            "    // BUG: anyone can create proposals – no voting power check\n"
+            "    function propose(address target, bytes calldata data, uint256 duration)\n"
+            "        external returns (uint256 id)"
+        ),
+    },
+    {
+        "id": 103,
+        "vuln_name": "Unchecked Return Value in DEXRouter",
+        "target": "DEXRouter",
+        "find": (
+            "        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);\n"
+            "        IERC20(tokenOut).transfer(msg.sender, amountOut);"
+        ),
+        "replace": (
+            "        // BUG: return values of transferFrom/transfer not checked\n"
+            "        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);\n"
+            "        IERC20(tokenOut).transfer(msg.sender, amountOut);"
+        ),
+    },
+    {
+        "id": 104,
+        "vuln_name": "Tx.Origin in TimelockController",
+        "target": "TimelockController",
+        "find": '        require(msg.sender == admin, "Not admin");',
+        "replace": '        require(tx.origin == admin, "Not admin");  // BUG: tx.origin',
+    },
+    {
+        "id": 105,
+        "vuln_name": "Delegate Call in ProxyContract",
+        "target": "ProxyContract",
+        "find": "    fallback() external payable {\n        address impl = _implementation();",
+        "replace": (
+            "    // BUG: unvalidated implementation address\n"
+            "    fallback() external payable {\n        address impl = _implementation();"
+        ),
+    },
+]
+
+
+def generate_large_synthetic_dataset(count: int = 50) -> list[dict]:
+    """
+    Generate *count* contracts using all templates and various mutations.
+
+    Parameters
+    ----------
+    count : int
+        Number of contracts to generate.
+
+    Returns
+    -------
+    list[dict]
+        List of contract dicts with ``name``, ``source_code``, and ``labels``.
+    """
+    all_templates = _SECURE_TEMPLATES + _EXTRA_SECURE_TEMPLATES
+    all_patches = _VULN_PATCHES + _EXTRA_VULN_PATCHES
+    contracts = []
+    idx = 0
+    while len(contracts) < count:
+        template = all_templates[idx % len(all_templates)]
+        # Cycle through patches for variety
+        patch_idx = idx % max(1, len(all_patches))
+        patch = all_patches[patch_idx]
+        if patch["target"] == template["name"] and patch["find"] in template["source_code"]:
+            contract = _apply_patches(template, [patch["id"]])
+        else:
+            contract = {
+                "name": f"{template['name']}_{idx}",
+                "source_code": template["source_code"],
+                "labels": list(template["labels"]),
+            }
+        # Ensure unique names
+        contract["name"] = f"{contract['name']}_{idx}"
+        contracts.append(contract)
+        idx += 1
+    return contracts[:count]

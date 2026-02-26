@@ -5,6 +5,7 @@ Wraps the OpenAI and Anthropic APIs with:
   - A configurable temperature.
   - An artificial pause of ≥13 seconds between calls to respect rate limits.
   - Support for binary and non-binary classification modes.
+  - Exponential backoff retry logic (up to 3 retries: 2/4/8 seconds).
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2  # seconds (doubles each retry: 2, 4, 8)
 
 # ---------------------------------------------------------------------------
 # Lazy imports – only import what the user actually needs, cached per process
@@ -82,6 +86,7 @@ def query_llm(
 
     Supports OpenAI models (``gpt-*``) and Anthropic models (``claude-*``).
     An artificial pause is enforced before each call.
+    Retries up to 3 times with exponential backoff (2/4/8 s) on transient errors.
 
     Parameters
     ----------
@@ -104,9 +109,25 @@ def query_llm(
     model = model or DEFAULT_MODEL
     temperature = temperature if temperature is not None else TEMPERATURE
 
-    if model.startswith("claude"):
-        return _query_anthropic(messages, model, temperature, max_tokens)
-    return _query_openai(messages, model, temperature, max_tokens)
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            if model.startswith("claude"):
+                return _query_anthropic(messages, model, temperature, max_tokens)
+            return _query_openai(messages, model, temperature, max_tokens)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "LLM call failed (attempt %d/%d): %s – retrying in %ds",
+                    attempt + 1, _MAX_RETRIES, exc, delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.error("LLM call failed after %d retries: %s", _MAX_RETRIES, exc)
+
+    raise RuntimeError(f"LLM query failed after {_MAX_RETRIES} retries") from last_exc
 
 
 def _query_openai(

@@ -65,9 +65,18 @@ with st.sidebar:
             "gpt-3.5-turbo",
             "claude-3-opus-20240229",
             "claude-3-sonnet-20240229",
+            "deepseek-v3.2",
+            "custom",
         ],
         index=0,
     )
+
+    if model_choice == "custom":
+        model_choice = st.text_input(
+            "Custom model name",
+            value="",
+            placeholder="e.g. deepseek-chat",
+        )
 
     temperature = st.slider(
         "Temperature",

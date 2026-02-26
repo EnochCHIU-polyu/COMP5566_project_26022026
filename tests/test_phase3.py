@@ -17,7 +17,7 @@ class TestTuningConfig:
             assert cfg.name
             assert cfg.model
             assert isinstance(cfg.temperature, float)
-            assert cfg.mode in ("binary", "non_binary", "cot")
+            assert cfg.mode in ("binary", "non_binary", "cot", "multi_vuln")
             assert cfg.max_tokens > 0
 
     def test_get_config_by_name_found(self):
