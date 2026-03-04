@@ -6,3 +6,12 @@ __pycache__/
 dist/
 build/
 .venv/
+
+# Runtime-generated data (not committed)
+data/synthetic_contracts/
+data/vulnerable_contracts/
+results/
+
+# Cached parsed benchmark files (regenerated automatically)
+data/benchmarks/smartbugs/contracts.json
+data/benchmarks/solidifi/contracts.json

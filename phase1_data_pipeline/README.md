@@ -21,16 +21,16 @@ This package handles everything related to acquiring, normalising, and pre-proce
 
 ## 1. Module Overview
 
-| File | Purpose |
-|------|---------|
-| `benchmark_datasets.py` | Download & cache SmartBugs / SolidiFI; normalise labels to internal taxonomy |
-| `contract_normalizer.py` | Strip comments, collapse whitespace, annotate line numbers |
-| `contract_chunker.py` | Split large contracts into function-level or sliding-window chunks |
-| `contract_preprocessor.py` | Token-count → normalise → truncate/chunk pipeline |
-| `synthetic_contracts.py` | 15 Solidity templates + semantic mutation operators |
-| `dataset_loader.py` | Load `.sol` / `.json` files from a local directory |
-| `token_counter.py` | tiktoken-based token counting with offline character fallback |
-| `etherscan_scraper.py` | Fetch verified source code from the Etherscan API |
+| File                       | Purpose                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `benchmark_datasets.py`    | Download & cache SmartBugs / SolidiFI; normalise labels to internal taxonomy |
+| `contract_normalizer.py`   | Strip comments, collapse whitespace, annotate line numbers                   |
+| `contract_chunker.py`      | Split large contracts into function-level or sliding-window chunks           |
+| `contract_preprocessor.py` | Token-count → normalise → truncate/chunk pipeline                            |
+| `synthetic_contracts.py`   | 15 Solidity templates + semantic mutation operators                          |
+| `dataset_loader.py`        | Load `.sol` / `.json` files from a local directory                           |
+| `token_counter.py`         | tiktoken-based token counting with offline character fallback                |
+| `etherscan_scraper.py`     | Fetch verified source code from the Etherscan API                            |
 
 ---
 
@@ -42,10 +42,10 @@ Downloads and normalises established benchmark datasets into the [unified contra
 
 ### Supported datasets
 
-| Dataset | Contracts | Vulnerability categories |
-|---------|-----------|--------------------------|
-| SmartBugs Curated | 143 | 10 (reentrancy, access control, arithmetic, …) |
-| SolidiFI | 9 369 injected bugs across 50 base contracts | 7 |
+| Dataset           | Contracts                                    | Vulnerability categories                       |
+| ----------------- | -------------------------------------------- | ---------------------------------------------- |
+| SmartBugs Curated | 143                                          | 10 (reentrancy, access control, arithmetic, …) |
+| SolidiFI          | 9 369 injected bugs across 50 base contracts | 7                                              |
 
 ### Key functions
 
@@ -61,10 +61,10 @@ from phase1_data_pipeline.benchmark_datasets import (
 
 #### `download_smartbugs(output_dir=None) -> list[dict]`
 
-Downloads SmartBugs Curated from GitHub and returns a list of contract records.  
+Checks for the SmartBugs Curated dataset and returns a list of contract records.
 Results are cached in `data/benchmarks/smartbugs/contracts.json`.
 
-**Manual setup** (if automatic download fails):
+**Manual setup** (Requires manually cloning before first use):
 
 ```bash
 git clone https://github.com/smartbugs/smartbugs-curated.git \
@@ -74,9 +74,12 @@ git clone https://github.com/smartbugs/smartbugs-curated.git \
 #### `download_solidifi(output_dir=None) -> list[dict]`
 
 Same as above for the SolidiFI dataset.  
-Manual setup: <https://github.com/smartbugs/SolidiFI-benchmark>
+Manual setup:
 
-#### `normalize_labels(external_labels, taxonomy_map) -> list[dict]`
+```bash
+git clone https://github.com/smartbugs/SolidiFI-benchmark \
+    data/benchmarks/solidifi
+```
 
 Maps external label taxonomies (SmartBugs categories, SWC IDs) to the 38 internal vulnerability names defined in `phase2_llm_engine/vulnerability_types.py`.
 
@@ -159,6 +162,7 @@ from phase1_data_pipeline.contract_chunker import (
 
 Produces one chunk per function (or group of functions that fit within `max_tokens`).  
 Each chunk contains:
+
 - The pragma / import block
 - All state variable declarations
 - The target function(s)
@@ -209,23 +213,23 @@ Generates labelled Solidity contracts with deliberately injected vulnerabilities
 
 ### Templates (15 total)
 
-| Template | Description |
-|----------|-------------|
-| `SecureVault` | ETH vault with owner-only withdraw |
-| `SecureToken` | Minimal ERC-20-like token |
-| `SecureStaking` | Simple staking contract |
-| `SecureMultiSig` | 2-of-3 multisig wallet |
-| `SecureLending` | Overcollateralised lending |
-| `ProxyContract` | Upgradeable proxy pattern |
-| `DEXRouter` | Simple DEX router |
-| `LendingPool` | Aave-like lending pool |
-| `GovernanceContract` | On-chain governance |
-| `NFTMarketplace` | NFT buy/sell marketplace |
-| `FlashLoanReceiver` | Flash loan callback receiver |
-| `StablecoinMinter` | Overcollateralised stablecoin |
-| `YieldFarm` | Yield farming contract |
-| `TimelockController` | Timelock for governance |
-| `MultiTokenVault` | ERC-4626-like multi-token vault |
+| Template             | Description                        |
+| -------------------- | ---------------------------------- |
+| `SecureVault`        | ETH vault with owner-only withdraw |
+| `SecureToken`        | Minimal ERC-20-like token          |
+| `SecureStaking`      | Simple staking contract            |
+| `SecureMultiSig`     | 2-of-3 multisig wallet             |
+| `SecureLending`      | Overcollateralised lending         |
+| `ProxyContract`      | Upgradeable proxy pattern          |
+| `DEXRouter`          | Simple DEX router                  |
+| `LendingPool`        | Aave-like lending pool             |
+| `GovernanceContract` | On-chain governance                |
+| `NFTMarketplace`     | NFT buy/sell marketplace           |
+| `FlashLoanReceiver`  | Flash loan callback receiver       |
+| `StablecoinMinter`   | Overcollateralised stablecoin      |
+| `YieldFarm`          | Yield farming contract             |
+| `TimelockController` | Timelock for governance            |
+| `MultiTokenVault`    | ERC-4626-like multi-token vault    |
 
 ### Vulnerability patches (15 semantic mutations)
 
@@ -327,36 +331,36 @@ All benchmark datasets are normalised to this schema:
 
 ```json
 {
-    "id": "sb_a1b2c3d4e5f6",
-    "name": "MyContract",
-    "source_code": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n...",
-    "compiler_version": "0.8.19",
-    "labels": [
-        {
-            "vuln_type": "Reentrancy",
-            "swc_id": "SWC-107",
-            "severity": "critical",
-            "lines": [42, 43, 44],
-            "function": "withdraw",
-            "description": "State update occurs after external call."
-        }
-    ],
-    "source": "smartbugs",
-    "split": "test"
+  "id": "sb_a1b2c3d4e5f6",
+  "name": "MyContract",
+  "source_code": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n...",
+  "compiler_version": "0.8.19",
+  "labels": [
+    {
+      "vuln_type": "Reentrancy",
+      "swc_id": "SWC-107",
+      "severity": "critical",
+      "lines": [42, 43, 44],
+      "function": "withdraw",
+      "description": "State update occurs after external call."
+    }
+  ],
+  "source": "smartbugs",
+  "split": "test"
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | `str` | SHA-256-based unique identifier |
-| `name` | `str` | Contract file name (without extension) |
-| `source_code` | `str` | Full Solidity source |
-| `compiler_version` | `str` | e.g. `"0.8.19"` |
-| `labels` | `list[dict]` | Multi-label ground truth (may be empty for benign contracts) |
-| `labels[].vuln_type` | `str` | Matches a name in `vulnerability_types.py` |
-| `labels[].swc_id` | `str \| null` | SWC identifier (e.g. `"SWC-107"`) |
-| `labels[].severity` | `str` | `critical \| high \| medium \| low \| info` |
-| `labels[].lines` | `list[int]` | 1-indexed affected line numbers |
-| `labels[].function` | `str \| null` | Affected function name |
-| `source` | `str` | `smartbugs \| solidifi \| etherscan \| synthetic` |
-| `split` | `str` | `train \| val \| test` |
+| Field                | Type          | Description                                                  |
+| -------------------- | ------------- | ------------------------------------------------------------ |
+| `id`                 | `str`         | SHA-256-based unique identifier                              |
+| `name`               | `str`         | Contract file name (without extension)                       |
+| `source_code`        | `str`         | Full Solidity source                                         |
+| `compiler_version`   | `str`         | e.g. `"0.8.19"`                                              |
+| `labels`             | `list[dict]`  | Multi-label ground truth (may be empty for benign contracts) |
+| `labels[].vuln_type` | `str`         | Matches a name in `vulnerability_types.py`                   |
+| `labels[].swc_id`    | `str \| null` | SWC identifier (e.g. `"SWC-107"`)                            |
+| `labels[].severity`  | `str`         | `critical \| high \| medium \| low \| info`                  |
+| `labels[].lines`     | `list[int]`   | 1-indexed affected line numbers                              |
+| `labels[].function`  | `str \| null` | Affected function name                                       |
+| `source`             | `str`         | `smartbugs \| solidifi \| etherscan \| synthetic`            |
+| `split`              | `str`         | `train \| val \| test`                                       |

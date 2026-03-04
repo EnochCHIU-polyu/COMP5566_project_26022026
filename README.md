@@ -251,19 +251,21 @@ Generated 5 synthetic contracts in data/synthetic_contracts/
 
 ### 6.3 Download Benchmark Datasets
 
+You need to manually clone the benchmark datasets into the `data/benchmarks` directory before using them:
+
 ```bash
-# Download SmartBugs Curated (143 labelled contracts, 10 categories)
-python main.py download-benchmarks --dataset smartbugs
+# Download SmartBugs Curated
+git clone https://github.com/smartbugs/smartbugs-curated.git data/benchmarks/smartbugs
 
 # Download SolidiFI injected-bug dataset
-python main.py download-benchmarks --dataset solidifi
+git clone https://github.com/smartbugs/SolidiFI-benchmark data/benchmarks/solidifi
 
-# Download both
+# After cloning, you can verify they load correctly
 python main.py download-benchmarks --dataset all
 ```
 
-Datasets are cached in `data/benchmarks/` to avoid re-downloading.  
-See [`phase1_data_pipeline/README.md`](phase1_data_pipeline/README.md) for manual setup instructions if the automatic download fails.
+Datasets are expected in `data/benchmarks/` to be parsed by the engine.  
+See [`phase1_data_pipeline/README.md`](phase1_data_pipeline/README.md) for more setup details.
 
 ---
 
