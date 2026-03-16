@@ -10,6 +10,7 @@ build/
 # Runtime-generated data (not committed)
 data/synthetic_contracts/
 data/vulnerable_contracts/
+data/human_feedback/
 results/
 
 # Cached parsed benchmark files (regenerated automatically)

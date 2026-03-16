@@ -41,6 +41,7 @@ from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
 from phase2_llm_engine.llm_client import query_llm
 from phase4_evaluation.scorer import compute_metrics
+from phase4_evaluation.human_feedback_logger import log_feedback
 
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -298,7 +299,7 @@ st.caption(
 )
 st.info(
     "Workflow: 1) paste/upload contract, 2) choose model and vulnerabilities, "
-    "3) run audit, 4) review findings and mark TP/FP/FN."
+    "3) run audit, 4) review findings and mark TP/FP/TN/FN. Feedback is persisted to disk."
 )
 
 # ---------------------------------------------------------------------------
@@ -383,6 +384,7 @@ with st.sidebar:
         st.metric("Recall", f"{metrics['recall']:.4f}")
         if st.button("Clear History"):
             st.session_state.score_history = []
+            st.session_state.verified_vulns = set()
             st.rerun()
 
 # ---------------------------------------------------------------------------
@@ -507,15 +509,19 @@ if st.button("🚀 Run Audit", type="primary", disabled=not source_code or not e
         logger.info("Audit completed: processed_vulnerabilities=%d", len(effective_selected_vulns))
         st.session_state.last_results = results
         st.session_state.last_source = source_code
+        st.session_state.verified_vulns = set()
 
 # ---------------------------------------------------------------------------
 # Results display with line highlighting
 # ---------------------------------------------------------------------------
 
 if "last_results" in st.session_state:
+    if "verified_vulns" not in st.session_state:
+        st.session_state.verified_vulns = set()
     st.subheader("📋 Audit Results")
     results = st.session_state.last_results
     source = st.session_state.last_source
+    verified_vulns = st.session_state.verified_vulns
 
     total_checks = len(results)
     error_count = sum(1 for r in results if r["response"].startswith("ERROR:"))
@@ -545,25 +551,92 @@ if "last_results" in st.session_state:
                 st.info("No code lines highlighted because this check returned an API/runtime error.")
 
             # ── Human-in-the-Loop scoring ────────────────────────────────────
-            st.markdown("**✅ Human Verification:**")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button("True Positive", key=f"tp_{r['vuln_name']}"):
-                    st.session_state.score_history.append(
-                        {"tp": 1, "fp": 0, "tn": 0, "fn": 0}
-                    )
-                    st.success("Recorded as True Positive")
-            with col2:
-                if st.button("False Positive", key=f"fp_{r['vuln_name']}"):
-                    st.session_state.score_history.append(
-                        {"tp": 0, "fp": 1, "tn": 0, "fn": 0}
-                    )
-                    st.info("Recorded as False Positive")
-            with col3:
-                if st.button("False Negative", key=f"fn_{r['vuln_name']}"):
-                    st.session_state.score_history.append(
-                        {"tp": 0, "fp": 0, "tn": 0, "fn": 1}
-                    )
-                    st.warning("Recorded as False Negative")
+            if not is_error:
+                st.markdown("**✅ Human Verification:**")
+                is_verified = r["vuln_name"] in verified_vulns
+
+                if is_vuln:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button(
+                            "True Positive",
+                            key=f"tp_{r['vuln_name']}",
+                            disabled=is_verified,
+                        ):
+                            st.session_state.score_history.append(
+                                {"tp": 1, "fp": 0, "tn": 0, "fn": 0}
+                            )
+                            st.session_state.verified_vulns.add(r["vuln_name"])
+                            log_feedback(
+                                verdict="TP",
+                                vuln_name=r["vuln_name"],
+                                llm_response=r["response"],
+                                source_code=source,
+                            )
+                            st.success("Recorded as True Positive")
+                            st.rerun()
+                    with col2:
+                        if st.button(
+                            "False Positive",
+                            key=f"fp_{r['vuln_name']}",
+                            disabled=is_verified,
+                        ):
+                            st.session_state.score_history.append(
+                                {"tp": 0, "fp": 1, "tn": 0, "fn": 0}
+                            )
+                            st.session_state.verified_vulns.add(r["vuln_name"])
+                            log_feedback(
+                                verdict="FP",
+                                vuln_name=r["vuln_name"],
+                                llm_response=r["response"],
+                                source_code=source,
+                            )
+                            st.info("Recorded as False Positive")
+                            st.rerun()
+                    with col3:
+                        st.caption("(LLM flagged as vulnerable)")
+                else:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button(
+                            "True Negative",
+                            key=f"tn_{r['vuln_name']}",
+                            disabled=is_verified,
+                        ):
+                            st.session_state.score_history.append(
+                                {"tp": 0, "fp": 0, "tn": 1, "fn": 0}
+                            )
+                            st.session_state.verified_vulns.add(r["vuln_name"])
+                            log_feedback(
+                                verdict="TN",
+                                vuln_name=r["vuln_name"],
+                                llm_response=r["response"],
+                                source_code=source,
+                            )
+                            st.success("Recorded as True Negative")
+                            st.rerun()
+                    with col2:
+                        if st.button(
+                            "False Negative",
+                            key=f"fn_{r['vuln_name']}",
+                            disabled=is_verified,
+                        ):
+                            st.session_state.score_history.append(
+                                {"tp": 0, "fp": 0, "tn": 0, "fn": 1}
+                            )
+                            st.session_state.verified_vulns.add(r["vuln_name"])
+                            log_feedback(
+                                verdict="FN",
+                                vuln_name=r["vuln_name"],
+                                llm_response=r["response"],
+                                source_code=source,
+                            )
+                            st.warning("Recorded as False Negative")
+                            st.rerun()
+                    with col3:
+                        st.caption("(LLM reported no vulnerability)")
+
+                if is_verified:
+                    st.caption("✓ Already verified")
 
 

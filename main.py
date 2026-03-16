@@ -63,6 +63,7 @@ def _run_audit(args: argparse.Namespace) -> None:
         mode=args.mode,
         temperature=args.temperature,
         verify=getattr(args, "verify", False),
+        use_filter=not getattr(args, "no_filter", False),
     )
 
     output_json = json.dumps(result, indent=2)
@@ -129,6 +130,11 @@ def main() -> None:
         "--verify",
         action="store_true",
         help="Run self-check verification pass on findings",
+    )
+    audit_parser.add_argument(
+        "--no-filter",
+        action="store_true",
+        help="Disable keyword relevance pre-filter (check all 38 vuln types)",
     )
 
     # ── generate sub-command ───────────────────────────────────────────────

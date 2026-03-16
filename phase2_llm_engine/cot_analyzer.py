@@ -20,7 +20,8 @@ from phase2_llm_engine.prompt_builder import (
 )
 from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
 from phase2_llm_engine.llm_client import query_llm
-from config import CLASSIFICATION_MODE
+from phase2_llm_engine.relevance_filter import filter_relevant_vulns
+from config import CLASSIFICATION_MODE, KEYWORD_PREFILTER_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ def analyze_contract(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     verify: bool = False,
+    use_filter: Optional[bool] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> dict:
     """
@@ -73,6 +75,9 @@ def analyze_contract(
     verify : bool
         If True, run a self-check verification pass on findings and add
         a ``"verified_findings"`` key to the result.
+    use_filter : bool, optional
+        If True, apply keyword relevance pre-filter to skip irrelevant vuln checks.
+        Defaults to ``KEYWORD_PREFILTER_ENABLED`` from config.
     progress_callback : callable, optional
         Called as ``callback(current, total, message)`` after each LLM call.
 
@@ -87,11 +92,23 @@ def analyze_contract(
         When ``verify=True``, also includes ``"verified_findings"`` key.
     """
     effective_mode = mode or CLASSIFICATION_MODE
+    apply_filter = use_filter if use_filter is not None else KEYWORD_PREFILTER_ENABLED
+    vulns_to_check = (
+        filter_relevant_vulns(source_code, VULNERABILITY_TYPES, no_filter=not apply_filter)
+        if apply_filter
+        else VULNERABILITY_TYPES
+    )
+    if apply_filter:
+        logger.info(
+            "Relevance filter: checking %d/%d vulnerability types",
+            len(vulns_to_check),
+            len(VULNERABILITY_TYPES),
+        )
     logger.info("Auditing '%s' | mode=%s | model=%s", contract_name, effective_mode, model)
 
     # ── multi_vuln mode: single call for all vulns ────────────────────────
     if effective_mode == "multi_vuln":
-        messages = build_multi_vuln_prompt(source_code, VULNERABILITY_TYPES)
+        messages = build_multi_vuln_prompt(source_code, vulns_to_check)
         response = query_llm(messages, model=model, temperature=temperature)
         if progress_callback:
             progress_callback(1, 1, "multi_vuln batch complete")
@@ -104,10 +121,10 @@ def analyze_contract(
             result["verified_findings"] = []
         return result
 
-    # ── Phase A: iterate over all 38 vulnerability types ─────────────────────
+    # ── Phase A: iterate over relevant vulnerability types ───────────────────
     vuln_results = []
-    total_vulns = len(VULNERABILITY_TYPES)
-    for idx, vuln in enumerate(VULNERABILITY_TYPES):
+    total_vulns = len(vulns_to_check)
+    for idx, vuln in enumerate(vulns_to_check):
         logger.debug("  Checking vulnerability: %s", vuln["name"])
         messages = build_prompt(
             source_code=source_code,

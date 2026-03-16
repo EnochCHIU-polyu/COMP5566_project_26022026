@@ -35,6 +35,11 @@ API_PAUSE_SECONDS: float = float(os.getenv("API_PAUSE_SECONDS", "13"))
 CLASSIFICATION_MODE: str = os.getenv("CLASSIFICATION_MODE", "non_binary")
 BATCH_VULNS_PER_PROMPT: int = int(os.getenv("BATCH_VULNS_PER_PROMPT", "8"))
 
+# ── Keyword Pre-filter ────────────────────────────────────────────────────────
+# If True, skip vulnerability checks with no matching keywords in the contract
+# (reduces API calls by ~60-80%)
+KEYWORD_PREFILTER_ENABLED: bool = os.getenv("KEYWORD_PREFILTER_ENABLED", "true").lower() in ("true", "1", "yes")
+
 # ── Data Paths ────────────────────────────────────────────────────────────────
 DATA_DIR: str = os.path.join(os.path.dirname(__file__), "data")
 VULNERABLE_CONTRACTS_DIR: str = os.path.join(DATA_DIR, "vulnerable_contracts")
