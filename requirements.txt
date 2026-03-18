@@ -3,6 +3,7 @@ anthropic>=0.20.0
 requests>=2.28.0
 tiktoken>=0.5.0
 streamlit>=1.30.0
+watchdog>=4.0.0
 pandas>=2.0.0
 matplotlib>=3.7.0
 pytest>=7.4.0

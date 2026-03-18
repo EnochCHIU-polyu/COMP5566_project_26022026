@@ -91,7 +91,7 @@ COMP5566_project_26022026/
 
 ## 3. Requirements
 
-- Python **3.10 or higher**
+- Python **3.10 or higher** (**3.11/3.12 recommended for Streamlit startup speed**)
 - A **GitHub Personal Access Token (PAT)** for GitHub Models (recommended)
 - (Optional) An **OpenAI API key** and/or **Anthropic API key** for direct provider access
 - (Optional) An **Etherscan API key** to scrape contracts directly from the blockchain
@@ -136,19 +136,20 @@ Create a `.env` file in the project root (already in `.gitignore`):
 
 ```dotenv
 # ── API Keys ──────────────────────────────────────────────────────
-# GitHub Models (recommended): set your GitHub PAT here
-GITHUB_TOKEN=github_pat_xxx
+# Poe (OpenAI-compatible API)
+POE_API_KEY=poe_xxx
+OPENAI_API_KEY=${POE_API_KEY}
+OPENAI_BASE_URL=https://api.poe.com/v1
 
-# Optional fallback for OpenAI direct access
-OPENAI_API_KEY=
-OPENAI_BASE_URL=https://models.github.ai/inference
+# Optional GitHub Models token (only needed if you still use GitHub-hosted models)
+GITHUB_TOKEN=
 
 # Optional providers
 ANTHROPIC_API_KEY=sk-ant-...
 ETHERSCAN_API_KEY=...          # only needed for Etherscan scraping
 
 # ── LLM Settings ──────────────────────────────────────────────────
-DEFAULT_MODEL=openai/o4-mini   # e.g. openai/o4-mini | openai/gpt-4o-mini | openai/gpt-4o | claude-3-opus-20240229
+DEFAULT_MODEL=deepseek-v3.2    # e.g. deepseek-v3.2 | openai/o4-mini | claude-3-opus-20240229
 TEMPERATURE=0                  # 0 = deterministic, 1 = more creative
 MAX_CONTEXT_TOKENS=32000
 API_PAUSE_SECONDS=13           # minimum pause between LLM calls

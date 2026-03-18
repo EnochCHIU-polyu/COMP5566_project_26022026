@@ -10,6 +10,7 @@ load_dotenv()
 
 # ── API Keys ────────────────────────────────────────────────────────────────
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "")
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 ETHERSCAN_API_KEY: str = os.getenv("ETHERSCAN_API_KEY", "")

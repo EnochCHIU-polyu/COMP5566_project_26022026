@@ -16,6 +16,7 @@ from typing import Optional
 
 from config import (
     OPENAI_API_KEY,
+    OPENAI_BASE_URL,
     ANTHROPIC_API_KEY,
     GITHUB_TOKEN,
     DEFAULT_MODEL,
@@ -43,7 +44,10 @@ def _get_openai_client():
     global _openai_client
     if _openai_client is None:
         import openai  # noqa: PLC0415
-        _openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        client_kwargs = {"api_key": OPENAI_API_KEY}
+        if OPENAI_BASE_URL:
+            client_kwargs["base_url"] = OPENAI_BASE_URL
+        _openai_client = openai.OpenAI(**client_kwargs)
     return _openai_client
 
 
@@ -189,9 +193,6 @@ def _normalize_model_name(model: str) -> str:
         "gpt-4o": "openai/gpt-4o",
         "gpt-4o-mini": "openai/gpt-4o-mini",
         "o4-mini": "openai/o4-mini",
-        "deepseek-v3.2": "deepseek/DeepSeek-V3-0324",
-        "deepseek-v3": "deepseek/DeepSeek-V3-0324",
-        "deepseek-chat": "deepseek/DeepSeek-V3-0324",
     }
     normalized = (model or "").strip()
     return alias_map.get(normalized.lower(), normalized)
@@ -199,10 +200,11 @@ def _normalize_model_name(model: str) -> str:
 
 def _should_use_github_models(model: str) -> bool:
     """Return True if this model should be called via GitHub Models endpoint."""
+    if OPENAI_BASE_URL and "models.github.ai" not in OPENAI_BASE_URL.lower():
+        return False
+
     lowered = model.lower()
     if model.startswith("openai/") or model.startswith("deepseek/"):
-        return True
-    if "deepseek" in lowered:
         return True
     if lowered in {"openai/o4-mini", "openai/gpt-4o", "openai/gpt-4o-mini"}:
         return True
