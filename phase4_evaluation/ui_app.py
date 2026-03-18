@@ -309,6 +309,7 @@ with st.sidebar:
     st.header("⚙️ Configuration")
 
     model_options = [
+        "deepseek-v3.2",
         "gpt-4o",
         "gpt-4o-mini",
         "custom",
