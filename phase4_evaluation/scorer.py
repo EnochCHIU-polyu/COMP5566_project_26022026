@@ -18,21 +18,65 @@ def _parse_binary_response(response: str) -> Optional[bool]:
     """
     Parse a binary YES/NO response from the LLM.
 
-    Returns ``True`` if the model flagged a vulnerability, ``False`` if not,
-    or ``None`` if the response could not be parsed.
+    Handles: plain YES/NO, markdown **YES**/**, language like "VULNERABLE",
+    "CRITICALLY VULNERABLE", "NOT VULNERABLE". Returns True if vulnerable,
+    False if not, or None if unparseable.
     """
-    text = response.strip().upper()
-    if text.startswith("YES"):
+    if not response or not response.strip():
+        return None
+    # Normalize: strip markdown bold, collapse whitespace
+    text = re.sub(r"\*+", "", response.strip())
+    text = " ".join(text.split())
+    text_upper = text.upper()
+
+    # 1) Direct YES/NO at start
+    if text_upper.startswith("YES"):
         return True
-    if text.startswith("NO"):
+    if text_upper.startswith("NO"):
         return False
-    # Fallback: search for YES/NO as whole words in the first 20 characters
-    snippet = text[:20]
+
+    # 2) YES/NO as whole word in first 150 chars (handles "**YES**, this...")
+    snippet = text_upper[:150]
     if re.search(r"\bYES\b", snippet):
         return True
     if re.search(r"\bNO\b", snippet):
         return False
+
+    # 3) Language markers: "VULNERABLE" / "CRITICALLY VULNERABLE" → YES
+    #    (avoid "NOT VULNERABLE", "NO VULNERABILITY")
+    head = text_upper[:300]
+    if re.search(r"\b(?:CRITICALLY\s+)?VULNERABLE\b", head):
+        if not re.search(r"\bNOT\s+VULNERABLE\b", head) and not re.search(r"\bNO\s+VULNERABILITY\b", head):
+            return True
+    if re.search(r"\bNOT\s+VULNERABLE\b", head) or re.search(r"\bNO\s+VULNERABILITY\b", head):
+        return False
+
     return None
+
+
+def _extract_confidence_from_response(response: str, predicted: Optional[bool]) -> float:
+    """
+    Extract confidence score from LLM response for AUC/PR-AUC computation.
+
+    Tries: 1) "Confidence: X.X" pattern, 2) YES->0.9/NO->0.1, 3) language markers.
+    """
+    # Pattern: "Confidence: 0.85" or "confidence: 0.8"
+    conf_match = re.search(r"[Cc]onfidence\s*:\s*([\d.]+)", response)
+    if conf_match:
+        try:
+            val = float(conf_match.group(1))
+            return max(0.0, min(1.0, val))
+        except ValueError:
+            pass
+    if predicted is True:
+        return 0.9
+    if predicted is False:
+        return 0.1
+    try:
+        from phase2_llm_engine.output_parser import extract_confidence
+        return extract_confidence(response)
+    except ImportError:
+        return 0.5
 
 
 def score_binary_result(
@@ -101,19 +145,19 @@ def evaluate_batch(
     """
     Evaluate a batch of audit results against ground-truth vulnerability labels.
 
+    Uses dataset + rule-based evaluation: parse YES/NO from response, compare to ground truth.
+
     Parameters
     ----------
     audit_results : list[dict]
-        Output from :func:`phase2_llm_engine.cot_analyzer.analyze_contract`,
-        one item per contract.
+        Output from analyze_contract or run_multi_llm_audit.
     ground_truth : dict[str, list[str]]
         Mapping of contract name → list of known vulnerability names.
-        e.g. ``{"SecureVault": ["Reentrancy"], "SecureToken": []}``
 
     Returns
     -------
     dict
-        Per-contract and aggregate confusion-matrix counts and metrics.
+        Per-contract and aggregate counts/metrics. Unparseable responses are skipped.
     """
     aggregate = {"TP": 0, "FP": 0, "TN": 0, "FN": 0}
     per_contract = []
@@ -125,36 +169,25 @@ def evaluate_batch(
 
         for vr in result.get("vuln_results", []):
             vuln_name = vr["vuln_name"]
-            predicted = _parse_binary_response(vr["response"])
-            if predicted is None:
-                # Cannot parse → skip this entry
-                continue
+            response = vr.get("response", "")
+            predicted = _parse_binary_response(response)
             actual = vuln_name in known_vulns
-            outcome = score_binary_result(predicted, actual)
-            counts[outcome] += 1
-            aggregate[outcome] += 1
+
+            if predicted is not None:
+                outcome = score_binary_result(predicted, actual)
+                counts[outcome] += 1
+                aggregate[outcome] += 1
 
         metrics = compute_metrics(**{k.lower(): v for k, v in counts.items()})
-        per_contract.append(
-            {"contract_name": name, "counts": counts, "metrics": metrics}
-        )
+        per_contract.append({"contract_name": name, "counts": counts, "metrics": metrics})
         logger.info(
             "Contract '%s': TP=%d FP=%d TN=%d FN=%d | F1=%.4f",
-            name,
-            counts["TP"],
-            counts["FP"],
-            counts["TN"],
-            counts["FN"],
-            metrics["f1"],
+            name, counts["TP"], counts["FP"], counts["TN"], counts["FN"], metrics["f1"],
         )
 
     aggregate_metrics = compute_metrics(
-        tp=aggregate["TP"],
-        fp=aggregate["FP"],
-        tn=aggregate["TN"],
-        fn=aggregate["FN"],
+        tp=aggregate["TP"], fp=aggregate["FP"], tn=aggregate["TN"], fn=aggregate["FN"],
     )
-
     return {
         "per_contract": per_contract,
         "aggregate": {"counts": aggregate, "metrics": aggregate_metrics},
@@ -200,6 +233,36 @@ def compute_per_vuln_metrics(audit_results: list[dict], ground_truth: dict) -> d
     return result_dict
 
 
+def _enrich_audit_results_with_confidence(
+    audit_results: list[dict],
+    ground_truth: dict[str, list[str]],
+) -> list[dict]:
+    """
+    Add confidence to each vuln_result for AUC computation.
+    Uses _extract_confidence_from_response when confidence is missing.
+    """
+    enriched = []
+    for result in audit_results:
+        name = result.get("contract_name", "")
+        known_vulns = set(ground_truth.get(name, []))
+        new_vuln_results = []
+        for vr in result.get("vuln_results", []):
+            vr_copy = dict(vr)
+            if "confidence" not in vr_copy or vr_copy.get("confidence") is None:
+                predicted = _parse_binary_response(vr.get("response", ""))
+                vuln_name = vr.get("vuln_name", "")
+                actual = vuln_name in known_vulns
+                vr_copy["confidence"] = _extract_confidence_from_response(
+                    vr.get("response", ""), predicted
+                )
+            new_vuln_results.append(vr_copy)
+        enriched.append({
+            "contract_name": name,
+            "vuln_results": new_vuln_results,
+        })
+    return enriched
+
+
 def compute_auc_roc(predictions: list[dict], ground_truth: dict) -> float:
     """
     Compute AUC-ROC using sklearn.
@@ -208,6 +271,7 @@ def compute_auc_roc(predictions: list[dict], ground_truth: dict) -> float:
     ----------
     predictions : list[dict]
         Each dict has "contract_name" and "vuln_results" with "confidence" scores.
+        If confidence is missing, it is inferred from response.
     ground_truth : dict
         Contract name → list of known vulnerability names.
 
@@ -222,8 +286,9 @@ def compute_auc_roc(predictions: list[dict], ground_truth: dict) -> float:
         logger.warning("sklearn not available; returning 0.0 for AUC-ROC")
         return 0.0
 
+    enriched = _enrich_audit_results_with_confidence(predictions, ground_truth)
     y_true, y_score = [], []
-    for result in predictions:
+    for result in enriched:
         name = result.get("contract_name", "")
         known_vulns = set(ground_truth.get(name, []))
         for vr in result.get("vuln_results", []):
@@ -252,6 +317,7 @@ def compute_pr_auc(predictions: list[dict], ground_truth: dict) -> float:
     ----------
     predictions : list[dict]
         Each dict has "contract_name" and "vuln_results" with "confidence" scores.
+        If confidence is missing, it is inferred from response.
     ground_truth : dict
         Contract name → list of known vulnerability names.
 
@@ -266,8 +332,9 @@ def compute_pr_auc(predictions: list[dict], ground_truth: dict) -> float:
         logger.warning("sklearn not available; returning 0.0 for PR-AUC")
         return 0.0
 
+    enriched = _enrich_audit_results_with_confidence(predictions, ground_truth)
     y_true, y_score = [], []
-    for result in predictions:
+    for result in enriched:
         name = result.get("contract_name", "")
         known_vulns = set(ground_truth.get(name, []))
         for vr in result.get("vuln_results", []):

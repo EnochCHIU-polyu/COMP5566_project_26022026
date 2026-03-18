@@ -40,7 +40,9 @@ from phase1_data_pipeline.token_counter import count_tokens
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
 from phase2_llm_engine.llm_client import query_llm
-from phase4_evaluation.scorer import compute_metrics
+from phase2_llm_engine.cot_analyzer import run_multi_llm_audit, analyze_contract
+from phase2_llm_engine.prompt_builder import build_batch_audit_prompt
+from phase4_evaluation.scorer import compute_metrics, evaluate_batch
 
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -144,51 +146,8 @@ def _extract_json_payload(raw_text: str) -> dict | None:
 
 
 def _build_batch_messages(source_code: str, selected_batch: list[dict], mode: str) -> list[dict]:
-    """Build one prompt that audits a batch of vulnerabilities and returns strict JSON."""
-    mode_instruction = {
-        "binary": "Use YES/NO verdict for each vulnerability, with a concise but specific explanation.",
-        "non_binary": "Provide detailed explanation for each vulnerability, including why it applies or does not apply.",
-        "cot": "Reason step-by-step internally and provide concise final explanations without revealing hidden chain-of-thought.",
-        "multi_vuln": "Audit all listed vulnerabilities together and provide detailed per-vulnerability explanations.",
-    }.get(mode, "Provide detailed explanation for each vulnerability.")
-
-    vuln_block = "\n".join(
-        f"- {v['name']}: {v['description']}" for v in selected_batch
-    )
-
-    schema = {
-        "results": [
-            {
-                "vuln_name": "<must exactly match one requested vulnerability name>",
-                "verdict": "YES|NO|UNCERTAIN",
-                "confidence": 0.0,
-                "explanation": "<detailed explanation>",
-                "evidence_lines": [1, 2],
-                "recommendation": "<fix suggestion>",
-            }
-        ]
-    }
-
-    user_prompt = (
-        "Audit the smart contract for each selected vulnerability and return ONLY valid JSON.\n\n"
-        f"Mode: {mode}\n"
-        f"Instruction: {mode_instruction}\n\n"
-        "Selected vulnerabilities:\n"
-        f"{vuln_block}\n\n"
-        "Requirements:\n"
-        "1) Return one result object for EVERY listed vulnerability (no omissions).\n"
-        "2) Keep vuln_name exactly identical to the provided name.\n"
-        "3) explanation must be specific and detailed per vulnerability.\n"
-        "4) evidence_lines should contain concrete line numbers when available, else [].\n"
-        "5) recommendation should be a practical fix for that vulnerability.\n\n"
-        f"Output schema:\n{json.dumps(schema, indent=2)}\n\n"
-        f"Source Code:\n{source_code}"
-    )
-
-    return [
-        {"role": "system", "content": "You are a senior smart contract security auditor. Output valid JSON only."},
-        {"role": "user", "content": user_prompt},
-    ]
+    """Build one prompt that audits a batch of vulnerabilities (uses shared prompt with hints)."""
+    return build_batch_audit_prompt(source_code, selected_batch, mode)
 
 
 def _format_batch_item_as_response(item: dict) -> str:
@@ -297,8 +256,7 @@ st.caption(
     "Human-in-the-Loop interface for LLM-assisted smart contract security auditing."
 )
 st.info(
-    "Workflow: 1) paste/upload contract, 2) choose model and vulnerabilities, "
-    "3) run audit, 4) review findings and mark TP/FP/FN."
+    "流程: 1) 粘贴/上传合约 2) 在侧边栏选择 **Audit Mode** 和模型 3) 选择漏洞类型 4) Run Audit"
 )
 
 # ---------------------------------------------------------------------------
@@ -308,57 +266,63 @@ st.info(
 with st.sidebar:
     st.header("⚙️ Configuration")
 
-    model_options = [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "custom",
-    ]
+    st.subheader("📋 Audit Mode")
+    audit_mode = st.radio(
+        "选择审计模式",
+        options=["standard", "agent", "multi_llm", "multi_llm_agent"],
+        format_func=lambda x: {
+            "standard": "① Standard — 单模型直接分析",
+            "agent": "② Agent — 单模型分析 + 另一模型判断",
+            "multi_llm": "③ Multi-LLM — 多模型各自分析，多数投票",
+            "multi_llm_agent": "④ Multi-LLM + Agent — 多模型各自 2 步推理，再投票",
+        }[x],
+        index=0,
+        help="Standard=快; Agent=每步有反思; Multi-LLM=多模型投票; ④=最严格",
+    )
+
+    model_options = ["gpt-4o", "gpt-4o-mini", "deepseek-v3.2", "claude-3-5-sonnet", "custom"]
     default_model_index = model_options.index(DEFAULT_MODEL) if DEFAULT_MODEL in model_options else 0
-
-    model_choice = st.selectbox(
-        "LLM Model",
-        model_options,
-        index=default_model_index,
-    )
-
+    model_choice = st.selectbox("主模型 (Standard/Agent 用)", model_options, index=min(default_model_index, 4))
     if model_choice == "custom":
-        model_choice = st.text_input(
-            "Custom model name",
-            value="",
-            placeholder="e.g. deepseek-chat",
+        model_choice = st.text_input("Custom model", placeholder="e.g. deepseek-chat")
+
+    agent_judge_model = None
+    multi_models = ["gpt-4o", "gpt-4o-mini"]
+    aggregation_mode = "majority"
+
+    if audit_mode in ("agent", "multi_llm_agent"):
+        agent_judge_model = st.selectbox(
+            "Judge 模型 (反思/判断用)",
+            options=["gpt-4o", "gpt-4o-mini", "deepseek-v3.2", "claude-3-5-sonnet"],
+            index=2,
+            help="对每个分析结果做二次判断",
         )
+    if audit_mode in ("multi_llm", "multi_llm_agent"):
+        multi_models = st.multiselect(
+            "参与投票的模型",
+            options=["gpt-4o", "gpt-4o-mini", "deepseek-v3.2", "claude-3-5-sonnet"],
+            default=["gpt-4o", "gpt-4o-mini"],
+            key="multi_llm_models",
+        )
+        aggregation_mode = st.radio("聚合方式", ["majority", "consensus"], format_func=lambda x: "多数投票" if x == "majority" else "全一致")
 
-    temperature = st.slider(
-        "Temperature",
-        min_value=0.0,
-        max_value=1.0,
-        value=float(TEMPERATURE),
-        step=0.1,
-        help="0 = deterministic, 1 = more creative",
-    )
-
-    mode_options = ["binary", "non_binary", "cot", "multi_vuln"]
-    default_mode_index = mode_options.index(CLASSIFICATION_MODE) if CLASSIFICATION_MODE in mode_options else 1
-
+    temperature = st.slider("Temperature", 0.0, 1.0, float(TEMPERATURE), 0.1)
     mode = st.selectbox(
         "Classification Mode",
-        mode_options,
-        index=default_mode_index,
-        help=(
-            "binary = concise verdict; non_binary = detailed per-vulnerability explanation; "
-            "cot = deeper reasoning style; multi_vuln = optimized batch analysis"
-        ),
+        ["binary", "non_binary", "cot", "multi_vuln"],
+        index=1,
+        help="non_binary=详细解释; binary=仅 YES/NO",
     )
+    batch_size = st.slider("Batch Size (Standard 模式)", 1, 12, max(1, min(BATCH_VULNS_PER_PROMPT, 12)), 1)
 
-    batch_size = st.slider(
-        "Batch Size (vulnerabilities per LLM call)",
-        min_value=1,
-        max_value=12,
-        value=max(1, min(BATCH_VULNS_PER_PROMPT, 12)),
-        step=1,
-        help="Larger batch = fewer API calls and faster runs, but harder JSON parsing.",
-    )
-
+    # Workflow summary
+    workflow_desc = {
+        "standard": f"→ {model_choice} 直接分析",
+        "agent": f"→ {model_choice} 分析 → {agent_judge_model or 'same'} 判断",
+        "multi_llm": f"→ {', '.join(multi_models)} 各自分析 → {aggregation_mode} 投票",
+        "multi_llm_agent": f"→ 各模型({', '.join(multi_models)})分析+{agent_judge_model}判断 → {aggregation_mode} 投票",
+    }[audit_mode]
+    st.info(f"**当前流程:** {workflow_desc}")
 
     st.markdown("---")
     st.header("📊 Scoring Dashboard")
@@ -389,7 +353,7 @@ with st.sidebar:
 # Main area – contract input
 # ---------------------------------------------------------------------------
 
-tab_paste, tab_upload = st.tabs(["📝 Paste Code", "📂 Upload File"])
+tab_paste, tab_upload, tab_benchmark = st.tabs(["📝 Paste Code", "📂 Upload File", "📊 Benchmark"])
 
 source_code_input = ""
 
@@ -412,6 +376,116 @@ with tab_upload:
                 source_code_input = raw
         else:
             source_code_input = raw
+
+with tab_benchmark:
+    st.subheader("📊 Benchmark 数据集")
+    from phase1_data_pipeline.benchmark_datasets import load_benchmark
+
+    bench_dataset = st.selectbox("数据集", ["smartbugs", "solidifi"], index=0)
+    bench_limit = st.number_input("加载前 N 条合约", min_value=1, max_value=200, value=3, step=1)
+    if st.button("📥 Load Benchmark"):
+        contracts = load_benchmark(bench_dataset)
+        if not contracts:
+            st.error(f"数据集 '{bench_dataset}' 未找到，请先运行: git clone ... data/benchmarks/{bench_dataset}")
+        else:
+            subset = contracts[:bench_limit]
+            st.session_state.benchmark_contracts = subset
+            st.session_state.benchmark_ground_truth = {
+                c["name"]: [lb["vuln_type"] for lb in c.get("labels", [])]
+                for c in subset
+            }
+            st.success(f"已加载 {len(subset)} 条合约")
+
+    if "benchmark_contracts" in st.session_state:
+        bc = st.session_state.benchmark_contracts
+        st.markdown(f"**已加载 {len(bc)} 条:**")
+        for i, c in enumerate(bc):
+            labels_str = ", ".join(lb["vuln_type"] for lb in c.get("labels", []))
+            st.caption(f"{i + 1}. **{c['name']}** — Ground Truth: [{labels_str}]")
+        st.markdown("---")
+        st.subheader("JSON 预览")
+        display_data = [
+            {"name": c["name"], "labels": [lb["vuln_type"] for lb in c.get("labels", [])], "source": c.get("source", "")}
+            for c in bc
+        ]
+        st.json(display_data)
+
+        # Vuln types to check: union of all ground-truth labels in loaded contracts
+        gt = st.session_state.benchmark_ground_truth
+        bench_vulns = sorted(set(v for vulns in gt.values() for v in vulns))
+        st.caption(f"将检测的漏洞类型 (来自 Ground Truth): {', '.join(bench_vulns) if bench_vulns else '无'}")
+
+        if st.button("🚀 Run Benchmark Audit", type="primary", key="run_bench_audit"):
+            if not bench_vulns:
+                st.error("加载的合约无 Ground Truth 标签，无法评估")
+            else:
+                st.session_state.benchmark_audit_requested = True
+                st.rerun()
+
+    # Run benchmark audit when requested (uses sidebar config: model_choice, mode, etc.)
+    if st.session_state.get("benchmark_audit_requested") and "benchmark_contracts" in st.session_state:
+        bc = st.session_state.benchmark_contracts
+        gt = st.session_state.benchmark_ground_truth
+        bench_vulns = sorted(set(v for vulns in gt.values() for v in vulns))
+        if bench_vulns:
+            st.session_state.benchmark_audit_requested = False
+            progress_bar = st.progress(0)
+            status = st.empty()
+            audit_results = []
+            for i, contract in enumerate(bc):
+                status.text(f"Auditing {i + 1}/{len(bc)}: {contract['name']}")
+                preprocessed = preprocess_contract(contract["source_code"], model=model_choice)
+                src = preprocessed["source_code"]
+                try:
+                    res = analyze_contract(
+                        source_code=src,
+                        contract_name=contract["name"],
+                        mode=mode,
+                        model=model_choice,
+                        temperature=temperature,
+                        vuln_filter=bench_vulns,
+                    )
+                    audit_results.append(res)
+                except Exception as exc:
+                    audit_results.append({
+                        "contract_name": contract["name"],
+                        "vuln_results": [],
+                        "error": str(exc),
+                    })
+                progress_bar.progress((i + 1) / len(bc))
+            status.text("✅ Audit complete. Computing metrics...")
+            scores = evaluate_batch(audit_results, gt)
+            st.session_state.benchmark_audit_results = {"audit_results": audit_results, "scores": scores}
+            progress_bar.empty()
+            status.empty()
+            st.rerun()
+
+    if "benchmark_audit_results" in st.session_state:
+        bar = st.session_state.benchmark_audit_results
+        st.subheader("📈 Benchmark 评估结果")
+        agg = bar["scores"].get("aggregate", {})
+        counts = agg.get("counts", {})
+        metrics = agg.get("metrics", {})
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("TP", counts.get("TP", 0))
+        c2.metric("FP", counts.get("FP", 0))
+        c3.metric("TN", counts.get("TN", 0))
+        c4.metric("FN", counts.get("FN", 0))
+        st.metric("F1", f"{metrics.get('f1', 0):.4f}")
+        st.markdown("---")
+        st.subheader("结果 JSON")
+        export = {
+            "per_contract": bar["scores"].get("per_contract", []),
+            "aggregate": agg,
+            "audit_results": [
+                {"contract_name": r["contract_name"], "vuln_results": r.get("vuln_results", [])}
+                for r in bar["audit_results"]
+            ],
+        }
+        st.json(export)
+        if st.button("Clear Benchmark Results", key="clear_bench_results"):
+            del st.session_state.benchmark_audit_results
+            st.rerun()
 
 source_code = source_code_input
 
@@ -468,9 +542,18 @@ estimated_batches = (
     else 0
 )
 estimated_seconds = max(1, int(estimated_batches * API_PAUSE_SECONDS)) if effective_selected_vulns else 0
-st.caption(
-    f"Selected checks: {len(effective_selected_vulns)} • batches: {estimated_batches} • estimated minimum runtime: ~{estimated_seconds}s"
-)
+if audit_mode in ("multi_llm", "multi_llm_agent") and multi_models:
+    n = len(effective_selected_vulns) * len(multi_models)
+    mult = 2 if audit_mode == "multi_llm_agent" else 1
+    total_calls = n * mult
+    estimated_seconds = max(1, int(total_calls * API_PAUSE_SECONDS)) if effective_selected_vulns else 0
+    st.caption(
+        f"{len(effective_selected_vulns)} vulns × {len(multi_models)} models × {mult} steps = {total_calls} API calls • ~{estimated_seconds}s"
+    )
+else:
+    st.caption(
+        f"Selected: {len(effective_selected_vulns)} • batches: {estimated_batches} • ~{estimated_seconds}s"
+    )
 
 # ---------------------------------------------------------------------------
 # Audit button
@@ -483,30 +566,89 @@ if st.button("🚀 Run Audit", type="primary", disabled=not source_code or not e
     if not effective_selected_vulns:
         st.error("Please select at least one vulnerability type.")
     else:
-        logger.info(
-            "Audit started: model=%s mode=%s selected_vulnerabilities=%d",
-            model_choice,
-            mode,
-            len(effective_selected_vulns),
-        )
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        if audit_mode in ("multi_llm", "multi_llm_agent"):
+            use_agent = audit_mode == "multi_llm_agent"
+            logger.info(
+                "Multi-LLM audit: models=%s agent=%s aggregation=%s",
+                multi_models,
+                use_agent,
+                aggregation_mode,
+            )
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            multi_kwargs = dict(
+                source_code=source_code,
+                contract_name="uploaded_contract",
+                models=multi_models,
+                mode=mode,
+                temperature=temperature,
+                aggregation=aggregation_mode,
+                vuln_filter=effective_selected_vulns,
+                progress_callback=lambda c, t, m: (
+                    progress_bar.progress(c / max(1, t)),
+                    status_text.text(m),
+                ),
+            )
+            if use_agent:
+                multi_kwargs["agent_mode"] = True
+                multi_kwargs["agent_judge_model"] = agent_judge_model
+            multi_result = run_multi_llm_audit(**multi_kwargs)
+            status_text.text("✅ Multi-LLM audit complete!")
+            results = [
+                {"vuln_name": vr["vuln_name"], "response": vr["response"]}
+                for vr in multi_result.get("vuln_results", [])
+                if vr["vuln_name"] in effective_selected_vulns
+            ]
+            if not results:
+                results = [{"vuln_name": vr["vuln_name"], "response": vr["response"]} for vr in multi_result.get("vuln_results", [])]
+            st.session_state.last_results = results
+            st.session_state.last_source = source_code
+        elif audit_mode == "agent":
+            logger.info("Agent audit: model=%s judge=%s", model_choice, agent_judge_model)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            agent_result = analyze_contract(
+                source_code=source_code,
+                contract_name="uploaded_contract",
+                mode=mode,
+                model=model_choice,
+                temperature=temperature,
+                agent_mode=True,
+                agent_judge_model=agent_judge_model,
+                vuln_filter=effective_selected_vulns,
+                progress_callback=lambda c, t, m: (
+                    progress_bar.progress(c / max(1, t)),
+                    status_text.text(m),
+                ),
+            )
+            status_text.text("✅ Agent audit complete!")
+            st.session_state.last_results = [{"vuln_name": vr["vuln_name"], "response": vr["response"]} for vr in agent_result.get("vuln_results", [])]
+            st.session_state.last_source = source_code
+        else:
+            logger.info(
+                "Audit started: model=%s mode=%s selected_vulnerabilities=%d",
+                model_choice,
+                mode,
+                len(effective_selected_vulns),
+            )
+            progress_bar = st.progress(0)
+            status_text = st.empty()
 
-        results = _run_batched_checks(
-            source_code=source_code,
-            selected_vuln_names=effective_selected_vulns,
-            mode=mode,
-            model_choice=model_choice,
-            temperature=temperature,
-            batch_size=batch_size,
-            progress_bar=progress_bar,
-            status_text=status_text,
-        )
+            results = _run_batched_checks(
+                source_code=source_code,
+                selected_vuln_names=effective_selected_vulns,
+                mode=mode,
+                model_choice=model_choice,
+                temperature=temperature,
+                batch_size=batch_size,
+                progress_bar=progress_bar,
+                status_text=status_text,
+            )
 
-        status_text.text("✅ Audit complete!")
-        logger.info("Audit completed: processed_vulnerabilities=%d", len(effective_selected_vulns))
-        st.session_state.last_results = results
-        st.session_state.last_source = source_code
+            status_text.text("✅ Audit complete!")
+            logger.info("Audit completed: processed_vulnerabilities=%d", len(effective_selected_vulns))
+            st.session_state.last_results = results
+            st.session_state.last_source = source_code
 
 # ---------------------------------------------------------------------------
 # Results display with line highlighting
