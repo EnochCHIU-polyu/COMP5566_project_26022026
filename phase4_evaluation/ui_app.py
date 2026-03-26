@@ -10,6 +10,7 @@ Features:
 - Call the LLM and display results.
 - Highlight the specific lines flagged by the LLM so auditors can verify quickly.
 - Show the scoring dashboard (TP/FP/TN/FN, F1/Precision/Recall).
+- Optional Benchmark tab: load SmartBugs/SolidiFI subset, run audit vs ground truth, show aggregate metrics.
 """
 
 from __future__ import annotations
@@ -40,7 +41,21 @@ from phase1_data_pipeline.token_counter import count_tokens
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
 from phase2_llm_engine.llm_client import query_llm
-from phase4_evaluation.scorer import compute_metrics
+from phase2_llm_engine.cot_analyzer import analyze_contract, analyze_contract_cascade, run_multi_llm_audit
+from phase4_evaluation.scorer import compute_metrics, evaluate_batch
+
+# Models available for cascade / multi-LLM (no "custom" placeholder in multiselects).
+_KNOWN_MODEL_IDS = [
+    "deepseek-v3.2",
+    "gpt-4o",
+    "gpt-4o-mini",
+]
+
+PIPELINE_LABELS = {
+    "standard": "Standard (batch JSON)",
+    "cascade": "Cascade (small→large + per-function CoT)",
+    "multi_llm": "Multi-LLM (ensemble)",
+}
 
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -178,9 +193,10 @@ def _build_batch_messages(source_code: str, selected_batch: list[dict], mode: st
         "Requirements:\n"
         "1) Return one result object for EVERY listed vulnerability (no omissions).\n"
         "2) Keep vuln_name exactly identical to the provided name.\n"
-        "3) explanation must be specific and detailed per vulnerability.\n"
-        "4) evidence_lines should contain concrete line numbers when available, else [].\n"
-        "5) recommendation should be a practical fix for that vulnerability.\n\n"
+        "3) For each item, verdict MUST be YES or NO (binary judgment); use UNCERTAIN only if truly impossible.\n"
+        "4) explanation must be specific and detailed per vulnerability.\n"
+        "5) evidence_lines should contain concrete line numbers when available, else [].\n"
+        "6) recommendation should be a practical fix for that vulnerability.\n\n"
         f"Output schema:\n{json.dumps(schema, indent=2)}\n\n"
         f"Source Code:\n{source_code}"
     )
@@ -297,8 +313,9 @@ st.caption(
     "Human-in-the-Loop interface for LLM-assisted smart contract security auditing."
 )
 st.info(
-    "Workflow: 1) paste/upload contract, 2) choose model and vulnerabilities, "
-    "3) run audit, 4) review findings and mark TP/FP/FN."
+    "Workflow: (1) Paste or upload a contract, (2) choose model, mode, and pipeline in the sidebar, "
+    "(3) select vulnerability types, (4) Run Audit, (5) review results — prompts require **YES/NO on line 1** "
+    "for per-vulnerability checks."
 )
 
 # ---------------------------------------------------------------------------
@@ -329,6 +346,11 @@ with st.sidebar:
             placeholder="e.g. deepseek-chat",
         )
 
+    st.caption(
+        f"The selected model is passed to `query_llm`. CLI `python main.py audit` without `--model` "
+        f"uses **DEFAULT_MODEL** from `.env` (currently `{DEFAULT_MODEL}`), not this dropdown."
+    )
+
     temperature = st.slider(
         "Temperature",
         min_value=0.0,
@@ -351,6 +373,82 @@ with st.sidebar:
         ),
     )
 
+    use_agent = st.checkbox(
+        "Agent mode (analyze → judge, same as CLI `--agent`)",
+        value=False,
+        disabled=(mode == "multi_vuln"),
+        help=(
+            "Per vulnerability: analyze, then a second model reviews. "
+            "Final reply still starts with YES/NO for `infer_verdict_for_scoring` / Benchmark. "
+            "This is not multi_vuln."
+        ),
+    )
+    agent_judge_model: str | None = None
+    if use_agent:
+        _judge_options = ["(same as primary model)"] + _KNOWN_MODEL_IDS
+        _j = st.selectbox("Judge model (second pass)", _judge_options, index=0)
+        if _j != "(same as primary model)":
+            agent_judge_model = _j
+
+    st.markdown("---")
+    st.subheader("Audit pipeline")
+    audit_pipeline = st.radio(
+        "Pipeline",
+        options=list(PIPELINE_LABELS.keys()),
+        format_func=lambda k: PIPELINE_LABELS[k],
+        index=0,
+        help="Standard matches CLI batch mode; Cascade mirrors --cascade; Multi-LLM mirrors audit-multi.",
+    )
+
+    cascade_small = "gpt-4o-mini"
+    cascade_large = "gpt-4o"
+    verify_cascade = False
+    verify_rag_cascade = False
+    multi_models = list(_KNOWN_MODEL_IDS)
+    multi_parallel = False
+    multi_aggregation = "majority"
+
+    if audit_pipeline == "cascade":
+        cascade_small = st.selectbox(
+            "Small model (binary pass)",
+            _KNOWN_MODEL_IDS,
+            index=_KNOWN_MODEL_IDS.index("gpt-4o-mini") if "gpt-4o-mini" in _KNOWN_MODEL_IDS else 0,
+        )
+        cascade_large = st.selectbox(
+            "Large model (deep pass + CoT)",
+            _KNOWN_MODEL_IDS,
+            index=_KNOWN_MODEL_IDS.index("gpt-4o") if "gpt-4o" in _KNOWN_MODEL_IDS else 0,
+        )
+        verify_cascade = st.checkbox(
+            "Post-verify positive findings (self-check)",
+            value=False,
+            help="Same as CLI --verify; optional second pass on flagged issues.",
+        )
+        verify_rag_cascade = st.checkbox(
+            "Use RAG in verification",
+            value=False,
+            disabled=not verify_cascade,
+            help="Requires scikit-learn; same as --verify-rag.",
+        )
+    elif audit_pipeline == "multi_llm":
+        multi_models = st.multiselect(
+            "Models",
+            _KNOWN_MODEL_IDS,
+            default=["gpt-4o", "gpt-4o-mini", "deepseek-v3.2"],
+            help="Each model runs the same batch audit; then votes are aggregated.",
+        )
+        multi_parallel = st.checkbox(
+            "Run models in parallel",
+            value=False,
+            help="Faster; same as audit-multi --parallel. Watch rate limits.",
+        )
+        multi_aggregation = st.radio(
+            "Aggregation",
+            ["majority", "consensus"],
+            horizontal=True,
+            help="majority = >50% YES; consensus = all models must agree YES.",
+        )
+
     batch_size = st.slider(
         "Batch Size (vulnerabilities per LLM call)",
         min_value=1,
@@ -358,39 +456,81 @@ with st.sidebar:
         value=max(1, min(BATCH_VULNS_PER_PROMPT, 12)),
         step=1,
         help="Larger batch = fewer API calls and faster runs, but harder JSON parsing.",
+        disabled=audit_pipeline != "standard",
     )
 
+    st.caption(
+        "Run locally: `streamlit run phase4_evaluation/ui_app.py` → http://localhost:8501"
+    )
+
+    # Current workflow summary (sidebar)
+    _flow_parts = [
+        f"Pipeline: **{PIPELINE_LABELS[audit_pipeline]}**",
+        f"Primary model `{model_choice}`",
+        f"Mode `{mode}`",
+    ]
+    if audit_pipeline == "cascade":
+        _flow_parts.append(f"Cascade `{cascade_small}` → `{cascade_large}`")
+    elif audit_pipeline == "multi_llm":
+        _flow_parts.append(f"Models {', '.join(multi_models)} · {multi_aggregation}")
+    if use_agent and mode != "multi_vuln":
+        _flow_parts.append(f"Agent judge `{agent_judge_model or model_choice}`")
+    st.info(" · ".join(_flow_parts))
 
     st.markdown("---")
     st.header("📊 Scoring Dashboard")
+
     if "score_history" not in st.session_state:
         st.session_state.score_history = []
 
-    if st.session_state.score_history:
-        tp = sum(r["tp"] for r in st.session_state.score_history)
-        fp = sum(r["fp"] for r in st.session_state.score_history)
-        tn = sum(r["tn"] for r in st.session_state.score_history)
-        fn = sum(r["fn"] for r in st.session_state.score_history)
-        metrics = compute_metrics(tp, fp, tn, fn)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("TP", tp)
-            st.metric("FP", fp)
-        with col2:
-            st.metric("TN", tn)
-            st.metric("FN", fn)
-        st.metric("F1 Score", f"{metrics['f1']:.4f}")
-        st.metric("Precision", f"{metrics['precision']:.4f}")
-        st.metric("Recall", f"{metrics['recall']:.4f}")
-        if st.button("Clear History"):
-            st.session_state.score_history = []
-            st.rerun()
+    _hist = st.session_state.score_history
+    tp = sum(r["tp"] for r in _hist)
+    fp = sum(r["fp"] for r in _hist)
+    tn = sum(r["tn"] for r in _hist)
+    fn = sum(r["fn"] for r in _hist)
+    metrics_hitl = compute_metrics(tp, fp, tn, fn)
+
+    st.subheader("Human-in-the-loop")
+    st.caption("In the main results area, click True Positive / False Positive / False Negative to record labels.")
+    h1, h2 = st.columns(2)
+    with h1:
+        st.metric("TP", tp)
+        st.metric("FP", fp)
+    with h2:
+        st.metric("TN", tn)
+        st.metric("FN", fn)
+    st.metric("F1 Score", f"{metrics_hitl['f1']:.4f}")
+    st.metric("Precision", f"{metrics_hitl['precision']:.4f}")
+    st.metric("Recall", f"{metrics_hitl['recall']:.4f}")
+    if st.button("Clear HITL History", key="clear_hitl_sidebar"):
+        st.session_state.score_history = []
+        st.rerun()
+
+    _bench = st.session_state.get("benchmark_audit_results")
+    if _bench:
+        st.subheader("Benchmark (latest run)")
+        agg_b = _bench.get("scores", {}).get("aggregate", {})
+        cnt_b = agg_b.get("counts", {})
+        met_b = agg_b.get("metrics", {})
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("TP", cnt_b.get("TP", 0))
+        b2.metric("FP", cnt_b.get("FP", 0))
+        b3.metric("TN", cnt_b.get("TN", 0))
+        b4.metric("FN", cnt_b.get("FN", 0))
+        st.metric("F1", f"{met_b.get('f1', 0):.4f}")
+        _sk = agg_b.get("skipped_unparseable", 0)
+        if _sk:
+            st.caption(f"Unparseable replies (skipped): {_sk}")
+        st.caption("Updated after you run an evaluation on the **Benchmark** tab. Clear results there.")
+
+# `analyze_contract` returns early on multi_vuln — agent loop never runs.
+agent_mode_effective = bool(use_agent) and mode != "multi_vuln"
 
 # ---------------------------------------------------------------------------
 # Main area – contract input
 # ---------------------------------------------------------------------------
 
-tab_paste, tab_upload = st.tabs(["📝 Paste Code", "📂 Upload File"])
+tab_paste, tab_upload, tab_benchmark = st.tabs(["📝 Paste Code", "📂 Upload File", "📊 Benchmark"])
 
 source_code_input = ""
 
@@ -413,6 +553,151 @@ with tab_upload:
                 source_code_input = raw
         else:
             source_code_input = raw
+
+with tab_benchmark:
+    st.subheader("📊 Benchmark dataset")
+    from phase1_data_pipeline.benchmark_datasets import load_benchmark
+
+    bench_dataset = st.selectbox("Dataset", ["smartbugs", "solidifi"], index=0)
+    bench_limit = st.number_input("Load first N contracts", min_value=1, max_value=200, value=3, step=1)
+    if st.button("📥 Load Benchmark"):
+        contracts = load_benchmark(bench_dataset)
+        if not contracts:
+            st.error(
+                f"Dataset '{bench_dataset}' not found. Clone into "
+                f"`data/benchmarks/{bench_dataset}` or run "
+                f"`python main.py download-benchmarks --dataset {bench_dataset}`"
+            )
+        else:
+            subset = contracts[: int(bench_limit)]
+            st.session_state.benchmark_contracts = subset
+            st.session_state.benchmark_ground_truth = {
+                c["name"]: [lb["vuln_type"] for lb in c.get("labels", [])]
+                for c in subset
+            }
+            st.success(f"Loaded {len(subset)} contract(s).")
+
+    if "benchmark_contracts" in st.session_state:
+        bc = st.session_state.benchmark_contracts
+        st.markdown(f"**Loaded {len(bc)} contract(s):**")
+        for i, c in enumerate(bc):
+            labels_str = ", ".join(lb["vuln_type"] for lb in c.get("labels", []))
+            st.caption(f"{i + 1}. **{c['name']}** — Ground truth: [{labels_str}]")
+        st.markdown("---")
+        st.subheader("JSON preview")
+        display_data = [
+            {
+                "name": c["name"],
+                "labels": [lb["vuln_type"] for lb in c.get("labels", [])],
+                "source_code": (c.get("source_code") or "")[:2000],
+            }
+            for c in bc
+        ]
+        st.json(display_data)
+
+        gt = st.session_state.benchmark_ground_truth
+        bench_vulns = sorted({v for vulns in gt.values() for v in vulns})
+        st.caption(
+            f"Vulnerability types under test (from ground truth): "
+            f"{', '.join(bench_vulns) if bench_vulns else '(none)'}"
+        )
+        st.info(
+            "**Evaluation contract:** per-vulnerability checks; each model reply must yield a readable **YES/NO** "
+            "on line 1 to compute TP/FP/TN/FN. "
+            "**multi_vuln** is a single prompt for all types — not compatible with per-type labels. "
+            "**Agent** (sidebar) adds a second pass; the stitched reply still starts with the final **YES/NO** verdict."
+        )
+        if mode == "multi_vuln":
+            st.warning(
+                "**multi_vuln** uses one batched prompt and cannot align with per-vulnerability ground truth. "
+                "Switch Classification Mode to **binary**, **non_binary**, or **cot**."
+            )
+
+        if st.button(
+            "🚀 Run Benchmark Audit",
+            type="primary",
+            key="run_bench_audit",
+            disabled=(mode == "multi_vuln"),
+        ):
+            if not bench_vulns:
+                st.error("Loaded contracts have no ground-truth labels; cannot evaluate.")
+            else:
+                st.session_state.benchmark_audit_requested = True
+                st.rerun()
+
+    if st.session_state.get("benchmark_audit_requested") and "benchmark_contracts" in st.session_state:
+        bc = st.session_state.benchmark_contracts
+        gt = st.session_state.benchmark_ground_truth
+        bench_vulns = sorted({v for vulns in gt.values() for v in vulns})
+        if bench_vulns:
+            st.session_state.benchmark_audit_requested = False
+            progress_bar = st.progress(0)
+            status = st.empty()
+            audit_results: list[dict] = []
+            for i, contract in enumerate(bc):
+                status.text(f"Auditing {i + 1}/{len(bc)}: {contract['name']}")
+                raw_src = contract.get("source_code") or ""
+                preprocessed = preprocess_contract(raw_src, model=model_choice)
+                src = preprocessed["source_code"]
+                try:
+                    res = analyze_contract(
+                        source_code=src,
+                        contract_name=contract["name"],
+                        mode=mode,
+                        model=model_choice,
+                        temperature=temperature,
+                        vuln_filter=bench_vulns,
+                        agent_mode=agent_mode_effective,
+                        agent_judge_model=agent_judge_model,
+                    )
+                    audit_results.append(res)
+                except Exception as exc:  # noqa: BLE001
+                    audit_results.append({
+                        "contract_name": contract["name"],
+                        "vuln_results": [],
+                        "error": str(exc),
+                    })
+                progress_bar.progress((i + 1) / len(bc))
+            status.text("✅ Audit complete. Computing metrics...")
+            scores = evaluate_batch(audit_results, gt)
+            st.session_state.benchmark_audit_results = {"audit_results": audit_results, "scores": scores}
+            progress_bar.empty()
+            status.empty()
+            st.rerun()
+
+    if "benchmark_audit_results" in st.session_state:
+        bar = st.session_state.benchmark_audit_results
+        st.subheader("📈 Benchmark results")
+        agg = bar["scores"].get("aggregate", {})
+        counts = agg.get("counts", {})
+        metrics = agg.get("metrics", {})
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("TP", counts.get("TP", 0))
+        c2.metric("FP", counts.get("FP", 0))
+        c3.metric("TN", counts.get("TN", 0))
+        c4.metric("FN", counts.get("FN", 0))
+        st.metric("F1", f"{metrics.get('f1', 0):.4f}")
+        _skip = agg.get("skipped_unparseable", 0)
+        if _skip:
+            st.warning(
+                f"**{_skip}** vulnerability reply/replies could not be parsed as YES/NO and were skipped "
+                "(not counted in TP/FP/TN/FN). Check the terminal for `Unparseable verdict` logs. "
+                "Ensure line 1 is English **YES** or **NO** (prompts enforce this)."
+            )
+        st.markdown("---")
+        st.subheader("Export JSON")
+        export = {
+            "per_contract": bar["scores"].get("per_contract", []),
+            "aggregate": agg,
+            "audit_results": [
+                {"contract_name": r["contract_name"], "vuln_results": r.get("vuln_results", [])}
+                for r in bar["audit_results"]
+            ],
+        }
+        st.json(export)
+        if st.button("Clear Benchmark Results", key="clear_bench_results"):
+            del st.session_state.benchmark_audit_results
+            st.rerun()
 
 source_code = source_code_input
 
@@ -469,9 +754,16 @@ estimated_batches = (
     else 0
 )
 estimated_seconds = max(1, int(estimated_batches * API_PAUSE_SECONDS)) if effective_selected_vulns else 0
-st.caption(
-    f"Selected checks: {len(effective_selected_vulns)} • batches: {estimated_batches} • estimated minimum runtime: ~{estimated_seconds}s"
-)
+if audit_pipeline == "standard":
+    st.caption(
+        f"Selected checks: {len(effective_selected_vulns)} • batches: {estimated_batches} • "
+        f"estimated minimum runtime: ~{estimated_seconds}s"
+    )
+else:
+    st.caption(
+        f"Selected checks: {len(effective_selected_vulns)} • pipeline: {PIPELINE_LABELS[audit_pipeline]} "
+        "(runtime depends on API latency and contract size)"
+    )
 
 # ---------------------------------------------------------------------------
 # Audit button
@@ -480,12 +772,20 @@ st.caption(
 if not source_code:
     st.warning("Add Solidity code first to enable audit.")
 
-if st.button("🚀 Run Audit", type="primary", disabled=not source_code or not effective_selected_vulns):
+_audit_disabled = (
+    not source_code
+    or not effective_selected_vulns
+    or (audit_pipeline == "multi_llm" and not multi_models)
+)
+if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
     if not effective_selected_vulns:
         st.error("Please select at least one vulnerability type.")
+    elif audit_pipeline == "multi_llm" and not multi_models:
+        st.error("Multi-LLM requires at least one model in the sidebar.")
     else:
         logger.info(
-            "Audit started: model=%s mode=%s selected_vulnerabilities=%d",
+            "Audit started: pipeline=%s model=%s mode=%s selected_vulnerabilities=%d",
+            audit_pipeline,
             model_choice,
             mode,
             len(effective_selected_vulns),
@@ -493,19 +793,83 @@ if st.button("🚀 Run Audit", type="primary", disabled=not source_code or not e
         progress_bar = st.progress(0)
         status_text = st.empty()
 
-        results = _run_batched_checks(
-            source_code=source_code,
-            selected_vuln_names=effective_selected_vulns,
-            mode=mode,
-            model_choice=model_choice,
-            temperature=temperature,
-            batch_size=batch_size,
-            progress_bar=progress_bar,
-            status_text=status_text,
-        )
+        def _progress_cb(cur: int, total: int, msg: str) -> None:
+            if total and total > 0:
+                progress_bar.progress(min(1.0, float(cur) / float(total)))
+            status_text.text(msg)
 
+        try:
+            if audit_pipeline == "standard":
+                results = _run_batched_checks(
+                    source_code=source_code,
+                    selected_vuln_names=effective_selected_vulns,
+                    mode=mode,
+                    model_choice=model_choice,
+                    temperature=temperature,
+                    batch_size=batch_size,
+                    progress_bar=progress_bar,
+                    status_text=status_text,
+                )
+                st.session_state.cascade_extra = None
+                st.session_state.last_pipeline = "standard"
+            elif audit_pipeline == "cascade":
+                status_text.text("Cascade audit running…")
+                cascade_result = analyze_contract_cascade(
+                    source_code=source_code,
+                    contract_name="Streamlit",
+                    small_model=cascade_small,
+                    large_model=cascade_large,
+                    temperature=temperature,
+                    verify=verify_cascade,
+                    verify_with_rag=verify_rag_cascade and verify_cascade,
+                    vuln_filter=effective_selected_vulns,
+                    progress_callback=_progress_cb,
+                )
+                results = [
+                    {"vuln_name": r["vuln_name"], "response": r["response"]}
+                    for r in cascade_result.get("vuln_results", [])
+                ]
+                st.session_state.cascade_extra = {
+                    "function_results": cascade_result.get("function_results", []),
+                    "verified_findings": cascade_result.get("verified_findings"),
+                    "cascade_meta": cascade_result.get("cascade"),
+                }
+                st.session_state.last_pipeline = "cascade"
+            else:
+                status_text.text(
+                    "Multi-LLM audit running…"
+                    + (" (parallel)" if multi_parallel else "")
+                )
+                multi_result = run_multi_llm_audit(
+                    source_code=source_code,
+                    contract_name="Streamlit",
+                    models=multi_models,
+                    mode=mode,
+                    temperature=temperature,
+                    aggregation=multi_aggregation,
+                    vuln_filter=effective_selected_vulns,
+                    parallel_models=multi_parallel,
+                    progress_callback=None if multi_parallel else _progress_cb,
+                )
+                results = [
+                    {"vuln_name": r["vuln_name"], "response": r["response"]}
+                    for r in multi_result.get("vuln_results", [])
+                ]
+                st.session_state.cascade_extra = {
+                    "function_results": multi_result.get("function_results") or [],
+                    "verified_findings": None,
+                    "models_used": multi_result.get("models_used"),
+                    "aggregation": multi_result.get("aggregation"),
+                }
+                st.session_state.last_pipeline = "multi_llm"
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Audit failed")
+            st.error(f"Audit failed: {exc}")
+            st.stop()
+
+        progress_bar.progress(1.0)
         status_text.text("✅ Audit complete!")
-        logger.info("Audit completed: processed_vulnerabilities=%d", len(effective_selected_vulns))
+        logger.info("Audit completed: processed_vulnerabilities=%d", len(results))
         st.session_state.last_results = results
         st.session_state.last_source = source_code
 
@@ -515,6 +879,26 @@ if st.button("🚀 Run Audit", type="primary", disabled=not source_code or not e
 
 if "last_results" in st.session_state:
     st.subheader("📋 Audit Results")
+    _lp = st.session_state.get("last_pipeline", "standard")
+    st.caption(f"Pipeline: {PIPELINE_LABELS.get(_lp, _lp)}")
+
+    extra = st.session_state.get("cascade_extra")
+    if extra:
+        if extra.get("verified_findings"):
+            st.subheader("🔎 Self-check verification")
+            st.dataframe(pd.DataFrame(extra["verified_findings"]))
+        fr_list = extra.get("function_results") or []
+        if fr_list:
+            st.subheader("🧩 Per-function CoT")
+            for fr_item in fr_list:
+                fn = fr_item.get("function_name", "?")
+                with st.expander(f"Function: {fn}", expanded=False):
+                    st.write(fr_item.get("response", ""))
+        if extra.get("models_used"):
+            st.caption(
+                f"Multi-LLM models: {extra['models_used']} • aggregation: {extra.get('aggregation', '')}"
+            )
+
     results = st.session_state.last_results
     source = st.session_state.last_source
 

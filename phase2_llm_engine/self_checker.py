@@ -29,7 +29,11 @@ class VerifiedFinding:
     verification_reasoning: str
 
 
-def _build_verification_prompt(finding: Finding, source_code: str) -> list[dict]:
+def _build_verification_prompt(
+    finding: Finding,
+    source_code: str,
+    rag_context: str = "",
+) -> list[dict]:
     """Build a skeptical verification prompt for a single finding."""
     lines_str = (
         ", ".join(f"L{ln}" for ln in finding.lines) if finding.lines else "unspecified lines"
@@ -38,7 +42,9 @@ def _build_verification_prompt(finding: Finding, source_code: str) -> list[dict]
         "You are a critical security reviewer tasked with verifying audit findings. "
         "Your job is to be skeptical and only confirm genuine vulnerabilities."
     )
+    rag_block = f"{rag_context}\n\n" if rag_context else ""
     user = (
+        f"{rag_block}"
         f"A security auditor claims this contract has a {finding.vuln_type} vulnerability "
         f"at {lines_str}.\n\n"
         f"The auditor's description: {finding.description}\n\n"
@@ -55,6 +61,7 @@ def verify_finding(
     query_fn,
     model: Optional[str] = None,
     temperature: float = 0.0,
+    use_rag: bool = False,
 ) -> VerifiedFinding:
     """
     Verify a single finding using a skeptical second-pass prompt.
@@ -71,12 +78,28 @@ def verify_finding(
         LLM model to use for verification.
     temperature : float
         Temperature for verification pass (recommend 0.0 for consistency).
+    use_rag : bool
+        If True, inject TF-IDF retrieved context from vulnerability corpus (verification-only).
 
     Returns
     -------
     VerifiedFinding
     """
-    messages = _build_verification_prompt(finding, source_code)
+    rag_context = ""
+    if use_rag:
+        try:
+            from phase2_llm_engine.verification_rag import retrieve_verification_context
+
+            rag_context = retrieve_verification_context(
+                vuln_type=finding.vuln_type,
+                finding_description=finding.description or "",
+                source_code_snippet=source_code,
+                top_k=3,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Verification RAG skipped: %s", exc)
+
+    messages = _build_verification_prompt(finding, source_code, rag_context=rag_context)
     try:
         raw = query_fn(messages, model=model, temperature=temperature)
         json_match = re.search(r'\{.*?\}', raw, re.DOTALL)
@@ -114,6 +137,7 @@ def self_check_audit(
     model: Optional[str] = None,
     temperature: float = 0.0,
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    use_rag: bool = False,
 ) -> list[VerifiedFinding]:
     """
     Run Pass 2 (verification) on all findings from Pass 1.
@@ -134,6 +158,8 @@ def self_check_audit(
         Temperature for verification.
     confidence_threshold : float
         Minimum confidence to keep a finding at its original severity.
+    use_rag : bool
+        If True, verification step uses retrieved reference chunks (single LLM call with context).
 
     Returns
     -------
@@ -141,7 +167,9 @@ def self_check_audit(
     """
     verified_findings = []
     for finding in initial_result.findings:
-        vf = verify_finding(finding, source_code, query_fn, model, temperature)
+        vf = verify_finding(
+            finding, source_code, query_fn, model, temperature, use_rag=use_rag
+        )
         if not vf.verified or vf.verification_confidence < confidence_threshold:
             finding.severity = "INFO"
             finding.confidence = vf.verification_confidence

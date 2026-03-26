@@ -6,6 +6,9 @@ Usage examples
 # Audit a single contract file (non-binary mode):
     python main.py audit --contract path/to/contract.sol
 
+# Use a specific model (otherwise DEFAULT_MODEL from .env / config, e.g. deepseek-v3.2):
+    python main.py audit --contract path/to/contract.sol --model gpt-4o
+
 # Run with binary mode and temperature 0:
     python main.py audit --contract path/to/contract.sol --mode binary --temperature 0
 
@@ -26,6 +29,13 @@ Usage examples
 
 # Launch the Streamlit UI:
     streamlit run phase4_evaluation/ui_app.py
+
+# Multi-LLM audit (aggregate results from multiple models):
+    python main.py audit-multi --contract path/to/contract.sol --models gpt-4o,gpt-4o-mini
+# Multi-LLM parallel + cascade + verification RAG:
+    python main.py audit-multi --contract c.sol --models gpt-4o,gpt-4o-mini --parallel
+    python main.py audit --contract c.sol --cascade --cascade-small gpt-4o-mini --cascade-large gpt-4o
+    python main.py audit --contract c.sol --verify --verify-rag
 """
 
 from __future__ import annotations
@@ -35,6 +45,8 @@ import json
 import logging
 import os
 import sys
+
+from config import DEFAULT_MODEL
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,12 +69,77 @@ def _run_audit(args: argparse.Namespace) -> None:
             preprocessed["token_count"],
         )
 
-    result = analyze_contract(
+    if getattr(args, "cascade", False):
+        from phase2_llm_engine.cot_analyzer import analyze_contract_cascade
+
+        logger.info(
+            "Cascade audit: small=%s large=%s (set via --cascade-small / --cascade-large)",
+            getattr(args, "cascade_small", "gpt-4o-mini"),
+            getattr(args, "cascade_large", "gpt-4o"),
+        )
+        result = analyze_contract_cascade(
+            source_code=preprocessed["source_code"],
+            contract_name=os.path.basename(args.contract),
+            small_model=getattr(args, "cascade_small", "gpt-4o-mini"),
+            large_model=getattr(args, "cascade_large", "gpt-4o"),
+            temperature=args.temperature,
+            verify=getattr(args, "verify", False),
+            verify_with_rag=getattr(args, "verify_rag", False),
+        )
+    else:
+        _cli_model = getattr(args, "model", None)
+        logger.info(
+            "Single-model audit: model=%s (CLI --model, or DEFAULT_MODEL from .env: %s)",
+            _cli_model or DEFAULT_MODEL,
+            DEFAULT_MODEL,
+        )
+        result = analyze_contract(
+            source_code=preprocessed["source_code"],
+            contract_name=os.path.basename(args.contract),
+            mode=args.mode,
+            model=_cli_model,
+            temperature=args.temperature,
+            verify=getattr(args, "verify", False),
+            verify_with_rag=getattr(args, "verify_rag", False),
+            agent_mode=getattr(args, "agent", False),
+            agent_judge_model=getattr(args, "agent_judge", None),
+        )
+
+    output_json = json.dumps(result, indent=2)
+    print(output_json)
+
+    if getattr(args, "output", None):
+        with open(args.output, "w", encoding="utf-8") as fh:
+            fh.write(output_json)
+        logger.info("Results written to %s", args.output)
+
+
+def _run_multi_llm_audit(args: argparse.Namespace) -> None:
+    from phase1_data_pipeline.contract_preprocessor import preprocess_contract
+    from phase2_llm_engine.cot_analyzer import run_multi_llm_audit
+
+    with open(args.contract, "r", encoding="utf-8") as fh:
+        raw_source = fh.read()
+
+    preprocessed = preprocess_contract(raw_source)
+    if preprocessed["truncated"]:
+        from phase1_data_pipeline.token_counter import count_tokens
+        original_count = count_tokens(raw_source)
+        logger.warning(
+            "Contract was truncated (%d → %d tokens).",
+            original_count,
+            preprocessed["token_count"],
+        )
+
+    models = [m.strip() for m in (args.models or "gpt-4o,gpt-4o-mini").split(",") if m.strip()]
+    result = run_multi_llm_audit(
         source_code=preprocessed["source_code"],
         contract_name=os.path.basename(args.contract),
-        mode=args.mode,
-        temperature=args.temperature,
-        verify=getattr(args, "verify", False),
+        models=models,
+        mode=getattr(args, "mode", None),
+        temperature=getattr(args, "temperature", None),
+        aggregation=getattr(args, "aggregation", "majority"),
+        parallel_models=getattr(args, "parallel", False),
     )
 
     output_json = json.dumps(result, indent=2)
@@ -119,6 +196,15 @@ def main() -> None:
     audit_parser = subparsers.add_parser("audit", help="Audit a smart contract file")
     audit_parser.add_argument("--contract", required=True, help="Path to .sol file")
     audit_parser.add_argument(
+        "--model",
+        default=None,
+        metavar="NAME",
+        help=(
+            f"LLM model id for this run (default: DEFAULT_MODEL from env/config, "
+            f"currently {DEFAULT_MODEL!r})"
+        ),
+    )
+    audit_parser.add_argument(
         "--mode",
         choices=["binary", "non_binary", "cot", "multi_vuln"],
         default="non_binary",
@@ -129,6 +215,62 @@ def main() -> None:
         "--verify",
         action="store_true",
         help="Run self-check verification pass on findings",
+    )
+    audit_parser.add_argument(
+        "--agent",
+        action="store_true",
+        help="Use agent mode: 2-step reasoning (analyze → reflect/judge) per vulnerability",
+    )
+    audit_parser.add_argument(
+        "--agent-judge",
+        default=None,
+        help="Model for agent reflection step (default: same as main model)",
+    )
+    audit_parser.add_argument(
+        "--verify-rag",
+        action="store_true",
+        help="With --verify: inject TF-IDF retrieved context into verification (1 LLM call)",
+    )
+    audit_parser.add_argument(
+        "--cascade",
+        action="store_true",
+        help="Cheap model binary first; expensive model only when not clearly safe (faster)",
+    )
+    audit_parser.add_argument(
+        "--cascade-small",
+        default="gpt-4o-mini",
+        help="Small/cheap model for cascade first pass (default: gpt-4o-mini)",
+    )
+    audit_parser.add_argument(
+        "--cascade-large",
+        default="gpt-4o",
+        help="Large model for cascade second pass (default: gpt-4o)",
+    )
+
+    # ── audit-multi sub-command (multi-LLM) ──────────────────────────────────
+    audit_multi_parser = subparsers.add_parser(
+        "audit-multi",
+        help="Audit contract with multiple LLMs and aggregate results",
+    )
+    audit_multi_parser.add_argument("--contract", required=True, help="Path to .sol file")
+    audit_multi_parser.add_argument(
+        "--models",
+        default="gpt-4o,gpt-4o-mini",
+        help="Comma-separated model names (default: gpt-4o,gpt-4o-mini)",
+    )
+    audit_multi_parser.add_argument(
+        "--aggregation",
+        choices=["majority", "consensus"],
+        default="majority",
+        help="majority=half+ vote YES; consensus=all must agree",
+    )
+    audit_multi_parser.add_argument("--mode", choices=["binary", "non_binary", "cot", "multi_vuln"], default="non_binary")
+    audit_multi_parser.add_argument("--temperature", type=float, default=None)
+    audit_multi_parser.add_argument("--output", default=None, help="Write JSON results to file")
+    audit_multi_parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run models concurrently (faster; respect API rate limits)",
     )
 
     # ── generate sub-command ───────────────────────────────────────────────
@@ -174,6 +316,8 @@ def main() -> None:
 
     if args.command == "audit":
         _run_audit(args)
+    elif args.command == "audit-multi":
+        _run_multi_llm_audit(args)
     elif args.command == "generate-synthetic":
         _generate_synthetic(args)
     elif args.command == "download-benchmarks":

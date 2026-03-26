@@ -14,14 +14,67 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def _parse_binary_response(response: str) -> Optional[bool]:
+def _infer_zh_verdict(text: str) -> Optional[bool]:
     """
-    Parse a binary YES/NO response from the LLM.
+    Best-effort parse when the model replies in Chinese (some APIs ignore English-only instructions).
 
-    Returns ``True`` if the model flagged a vulnerability, ``False`` if not,
-    or ``None`` if the response could not be parsed.
+    Conservative: avoid false positives on negation phrases.
     """
-    text = response.strip().upper()
+    if not text or not str(text).strip():
+        return None
+    raw = str(text).strip()
+    head = raw[:900]
+
+    # Explicit conclusion lines (Chinese)
+    for pat in (
+        r"(?:^|\n)\s*[\*#]*\s*(?:结论|答案|判断|判定|最终结论|总结)[:：]\s*(是|否)",
+        r"(?:^|\n)\s*[\*#]*\s*(?:结论|答案)[:：]\s*(存在|不存在)(?:漏洞)?",
+    ):
+        m = re.search(pat, head)
+        if m:
+            g = m.group(1)
+            if g in ("是", "存在"):
+                return True
+            if g in ("否", "不存在"):
+                return False
+
+    # First non-empty line (after light markdown strip)
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        s = re.sub(r"^[\s\*#_`\-]+|[\*`_]+$", "", s).strip()
+        if s.startswith("是否"):
+            return None
+        # Negative patterns first
+        if re.match(r"^(?:不是|否[，。,\s]|否$|无漏洞|不存在|没有|没有该|未检测到)", s):
+            return False
+        if re.match(r"^(?:是[，。,\s]|是$|是的|有漏洞|存在漏洞|存在该)", s):
+            return True
+        if s.startswith("否"):
+            return False
+        break
+
+    # Phrases in opening paragraph (negation before positive match)
+    if re.search(r"不存在.{0,8}漏洞|没有.{0,8}漏洞|未.{0,6}发现.{0,8}漏洞", head):
+        return False
+    if re.search(r"存在.{0,8}漏洞|存在.{0,6}风险", head):
+        return True
+    return None
+
+
+def infer_verdict_for_scoring(response: str) -> Optional[bool]:
+    """
+    Infer a boolean vulnerability verdict from an LLM reply, for TP/FP/TN/FN scoring.
+
+    Used for **all** per-vulnerability classification modes (``binary``, ``non_binary``,
+    ``cot``) as long as prompts follow ``build_prompt`` (first line YES/NO for
+    non-binary modes). Returns ``None`` only when no reliable verdict can be read.
+
+    Returns ``True`` if vulnerable, ``False`` if not, ``None`` if unparseable.
+    """
+    raw = response.strip()
+    text = raw.upper()
     if text.startswith("YES"):
         return True
     if text.startswith("NO"):
@@ -32,7 +85,40 @@ def _parse_binary_response(response: str) -> Optional[bool]:
         return True
     if re.search(r"\bNO\b", snippet):
         return False
+    # First non-empty line: allow markdown (**YES**), bullets, headings
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        cleaned = re.sub(r"^[\s\*#_`\-]+|[\*`_]+$", "", stripped).strip().upper()
+        if cleaned.startswith("YES"):
+            return True
+        if cleaned.startswith("NO"):
+            return False
+        break
+    # Verdict / answer line (common in long-form replies)
+    m = re.search(
+        r"(?:^|\n)\s*(?:VERDICT|ANSWER|CONCLUSION)\s*[:：]?\s*(YES|NO)\b",
+        text,
+    )
+    if m:
+        return m.group(1) == "YES"
+    # Scan first ~600 chars for standalone YES/NO (handles preamble junk)
+    early = raw[:600].upper()
+    ym = re.search(r"\bYES\b", early)
+    nm = re.search(r"\bNO\b", early)
+    if ym and (not nm or ym.start() < nm.start()):
+        return True
+    if nm and (not ym or nm.start() < ym.start()):
+        return False
+
+    zh = _infer_zh_verdict(raw)
+    if zh is not None:
+        return zh
     return None
+
+
+_parse_binary_response = infer_verdict_for_scoring
 
 
 def score_binary_result(
@@ -105,7 +191,8 @@ def evaluate_batch(
     ----------
     audit_results : list[dict]
         Output from :func:`phase2_llm_engine.cot_analyzer.analyze_contract`,
-        one item per contract.
+        one item per contract. Per-vuln ``response`` text is interpreted with
+        :func:`infer_verdict_for_scoring` (expects YES/NO-compatible output from prompts).
     ground_truth : dict[str, list[str]]
         Mapping of contract name → list of known vulnerability names.
         e.g. ``{"SecureVault": ["Reentrancy"], "SecureToken": []}``
@@ -117,17 +204,27 @@ def evaluate_batch(
     """
     aggregate = {"TP": 0, "FP": 0, "TN": 0, "FN": 0}
     per_contract = []
+    skipped_total = 0
 
     for result in audit_results:
         name = result["contract_name"]
         known_vulns = set(ground_truth.get(name, []))
         counts = {"TP": 0, "FP": 0, "TN": 0, "FN": 0}
+        skipped_here = 0
 
         for vr in result.get("vuln_results", []):
             vuln_name = vr["vuln_name"]
-            predicted = _parse_binary_response(vr["response"])
+            predicted = infer_verdict_for_scoring(vr["response"])
             if predicted is None:
-                # Cannot parse → skip this entry
+                skipped_here += 1
+                skipped_total += 1
+                snippet = (vr.get("response") or "")[:160].replace("\n", " ")
+                logger.warning(
+                    "Unparseable verdict for contract=%s vuln=%s (skipped). Snippet: %s",
+                    name,
+                    vuln_name,
+                    snippet,
+                )
                 continue
             actual = vuln_name in known_vulns
             outcome = score_binary_result(predicted, actual)
@@ -136,16 +233,22 @@ def evaluate_batch(
 
         metrics = compute_metrics(**{k.lower(): v for k, v in counts.items()})
         per_contract.append(
-            {"contract_name": name, "counts": counts, "metrics": metrics}
+            {
+                "contract_name": name,
+                "counts": counts,
+                "metrics": metrics,
+                "skipped_unparseable": skipped_here,
+            }
         )
         logger.info(
-            "Contract '%s': TP=%d FP=%d TN=%d FN=%d | F1=%.4f",
+            "Contract '%s': TP=%d FP=%d TN=%d FN=%d | F1=%.4f | skipped(unparseable)=%d",
             name,
             counts["TP"],
             counts["FP"],
             counts["TN"],
             counts["FN"],
             metrics["f1"],
+            skipped_here,
         )
 
     aggregate_metrics = compute_metrics(
@@ -157,7 +260,11 @@ def evaluate_batch(
 
     return {
         "per_contract": per_contract,
-        "aggregate": {"counts": aggregate, "metrics": aggregate_metrics},
+        "aggregate": {
+            "counts": aggregate,
+            "metrics": aggregate_metrics,
+            "skipped_unparseable": skipped_total,
+        },
     }
 
 
@@ -184,7 +291,7 @@ def compute_per_vuln_metrics(audit_results: list[dict], ground_truth: dict) -> d
         known_vulns = set(ground_truth.get(name, []))
         for vr in result.get("vuln_results", []):
             vuln_name = vr["vuln_name"]
-            predicted = _parse_binary_response(vr["response"])
+            predicted = infer_verdict_for_scoring(vr["response"])
             if predicted is None:
                 continue
             actual = vuln_name in known_vulns

@@ -9,8 +9,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── API Keys ────────────────────────────────────────────────────────────────
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "")
+POE_API_KEY: str = os.getenv("POE_API_KEY", "")
+OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "") or POE_API_KEY
+OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "")  # e.g. https://api.poe.com/v1 for Poe
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 ETHERSCAN_API_KEY: str = os.getenv("ETHERSCAN_API_KEY", "")

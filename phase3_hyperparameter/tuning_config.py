@@ -42,6 +42,10 @@ class TuningConfig:
         If True, apply keyword relevance filter before auditing.
     few_shot : bool
         If True, use few-shot prompting with examples.
+    agent_mode : bool
+        If True, use 2-step agent reasoning (analyze → reflect/judge).
+    agent_judge_model : str, optional
+        Model for reflection step when agent_mode is True.
     """
 
     name: str
@@ -54,6 +58,8 @@ class TuningConfig:
     batch_vulns: int = 1
     use_filter: bool = True
     few_shot: bool = False
+    agent_mode: bool = False
+    agent_judge_model: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +129,15 @@ DEFAULT_EXPERIMENT_GRID: list[TuningConfig] = [
         temperature=0.0,
         mode="multi_vuln",
         notes="GPT-4o multi-vulnerability batch mode",
+    ),
+    TuningConfig(
+        name="T0-gpt4o-agent",
+        model="gpt-4o",
+        temperature=0.0,
+        mode="non_binary",
+        agent_mode=True,
+        agent_judge_model="gpt-4o-mini",
+        notes="Agent mode: gpt-4o analyzes, gpt-4o-mini reflects/judges",
     ),
 ]
 

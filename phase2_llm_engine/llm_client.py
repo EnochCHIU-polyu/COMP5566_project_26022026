@@ -143,6 +143,11 @@ def query_llm(
     last_exc: Optional[Exception] = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
+            # When OPENAI_BASE_URL is set (e.g. Poe), use OpenAI-compatible client for all models
+            if OPENAI_BASE_URL and OPENAI_API_KEY:
+                logger.info("LLM provider selected: openai-compatible (base_url=%s, model=%s)", OPENAI_BASE_URL, model)
+                return _query_openai(messages, model, temperature, max_tokens)
+
             if model.startswith("claude"):
                 logger.info("LLM provider selected: anthropic (model=%s)", model)
                 return _query_anthropic(messages, model, temperature, max_tokens)
@@ -189,6 +194,9 @@ def _is_region_block_error(exc: Exception) -> bool:
 
 def _normalize_model_name(model: str) -> str:
     """Map UI-friendly aliases to provider-specific model identifiers."""
+    # When using Poe/OpenAI-compatible API, pass model name as-is
+    if OPENAI_BASE_URL:
+        return (model or "").strip()
     alias_map = {
         "gpt-4o": "openai/gpt-4o",
         "gpt-4o-mini": "openai/gpt-4o-mini",

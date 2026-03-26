@@ -47,7 +47,11 @@ OUTPUT SCHEMA:
 _SYSTEM_INSTRUCTION = (
     "You are an AI smart contract auditor that excels at finding vulnerabilities "
     "in blockchain smart contracts. Review the following smart contract code in "
-    "detail and very thoroughly. Think step by step."
+    "detail and very thoroughly. Think step by step. "
+    "For reentrancy: if state is updated AFTER an external call (.call, .transfer, etc.), "
+    "the verdict should be YES — that is a classic vulnerability. "
+    "Whenever the user instructions require a line-1 verdict, you MUST output YES or NO "
+    "on the first line of your reply before any explanation."
 )
 
 _TASK_QUERY_TEMPLATE = (
@@ -56,14 +60,78 @@ _TASK_QUERY_TEMPLATE = (
     "It makes sense to audit each function independently and then see how they "
     "link to other functions. First, read each function critically and identify "
     "critical security issues that can lead to loss of funds.\n\n"
-    "Is the following smart contract vulnerable to {vuln_name} attacks?"
+    "Question: Is the following smart contract vulnerable to {vuln_name} attacks?\n"
+    "You must decide and state a clear binary verdict (see VERDICT section below)."
 )
 
+# Verdict-first: parsers and benchmarks rely on line 1 being exactly YES or NO.
 _BINARY_SUFFIX = (
-    "\n\nAnswer with YES or NO only, followed by a one-sentence justification."
+    "\n\n=== MANDATORY VERDICT (BINARY MODE) ===\n"
+    "Output rules (strict):\n"
+    "- Line 1: ONLY the English word YES or NO (no punctuation, no label, no markdown heading on line 1).\n"
+    "- Meaning: YES = the contract IS vulnerable to this attack type; NO = it is NOT.\n"
+    "- Line 2: exactly one short English sentence justifying the verdict.\n"
+    "- Do not put analysis before line 1. Automated evaluation reads line 1 only for the verdict."
 )
 
-_COT_FUNCTION_QUERY = "Do a proper review of the {function_name}() function."
+_SCORING_FIRST_LINE_SUFFIX = (
+    "\n\n=== MANDATORY VERDICT (DETAILED MODE) ===\n"
+    "Output rules (strict):\n"
+    "- Line 1: ONLY the English word YES or NO.\n"
+    "- YES = the contract IS vulnerable to {vuln_name}; NO = it is NOT vulnerable to that type.\n"
+    "- Line 2 onward: full analysis in English (reasoning, code references, steps).\n"
+    "- Do not prefix line 1 with labels like 'Verdict:' — the first characters of your reply must be Y-E-S or N-O.\n"
+    "- Breaking this format invalidates automated scoring."
+)
+
+_COT_FUNCTION_QUERY = (
+    "Do a proper security review of the {function_name}() function.\n\n"
+    "=== MANDATORY VERDICT ===\n"
+    "Line 1: ONLY the English word YES or NO.\n"
+    "YES = you find a security concern in this function; NO = no material concern for this function.\n"
+    "Line 2+: reasoning and references."
+)
+
+# Per-vulnerability-type critical hints for Agent/judge (all 38 types)
+VULN_CRITICAL_HINTS = {
+    "Reentrancy": "State updated AFTER external call (.call{value}) → YES",
+    "Cross-Function Reentrancy": "State shared across functions, external call before update → YES",
+    "Read-Only Reentrancy": "View function calls external before state read → YES",
+    "Integer Overflow/Underflow": "Solidity <0.8 without SafeMath, or unchecked block → YES",
+    "Access Control": "Privileged function without onlyOwner/require(msg.sender) → YES",
+    "Unchecked Return Value": "Low-level call/send/transfer return value ignored → YES",
+    "Timestamp Dependence": "block.timestamp for randomness or critical logic → YES",
+    "Tx.Origin Authentication": "tx.origin used for auth instead of msg.sender → YES",
+    "Unprotected Self-Destruct": "selfdestruct without access control → YES",
+    "Delegate Call": "delegatecall to user-controlled address → YES",
+    "Unsafe Randomness": "block.timestamp/hash for randomness → YES",
+    "Oracle Manipulation": "Single oracle or manipulable price source → YES",
+    "Signature Replay": "Signature used without nonce/chainId → YES",
+    "Uninitialized Storage Pointer": "Storage pointer to uninitialized storage → YES",
+    "Logic Error": "Incorrect business logic, wrong condition → YES",
+    "Improper Input Validation": "Missing require/validation on inputs → YES",
+    "Denial of Service": "Loop over unbounded array, or revert blocks progress → YES",
+    "Front-Running": "Mempool-visible tx order dependency → YES",
+    "Flash Loan Attack": "Single-tx manipulation via flash loan → YES",
+    "ERC-20 Approval Exploit": "Approval before transfer, or infinite approval → YES",
+    "Forced Ether Send": "Contract assumes msg.value or balance without check → YES",
+    "Griefing": "Attacker can cause revert or block progress → YES",
+    "Short Address Attack": "ERC-20 transfer with padded address → YES",
+    "Upgradability Flaw": "Proxy/upgrade without proper initialization → YES",
+    "Denial of Service via Revert": "External call can revert and block → YES",
+    "Token Inflation": "Unchecked mint or supply manipulation → YES",
+    "Liquidity Drain": "Manipulable AMM or oracle → YES",
+    "Incorrect Inheritance": "Wrong override order or missing super → YES",
+    "Phantom Function": "Fallback/receive without proper handling → YES",
+    "Event Spoofing": "Missing indexed or verifiable event → YES",
+    "Insufficient Gas Stipend": "Low-level call with limited gas → YES",
+    "Frozen Ether": "ETH stuck due to missing receive/fallback → YES",
+    "Misuse of Assembly": "Unsafe assembly, storage collision → YES",
+    "Centralization Risk": "Single admin/owner with excessive power → YES",
+    "Price Manipulation": "TWAP or oracle manipulable in one block → YES",
+    "Sandwich Attack": "Mempool front-run + back-run → YES",
+    "Governance Attack": "Vote manipulation or flash loan governance → YES",
+}
 
 
 def build_prompt(
@@ -72,6 +140,8 @@ def build_prompt(
     vuln_description: str,
     mode: str = "non_binary",
     structured: bool = False,
+    example_vulnerable: str = "",
+    example_fixed: str = "",
 ) -> list[dict]:
     """
     Build a list of LLM messages for a single vulnerability check.
@@ -85,9 +155,9 @@ def build_prompt(
     vuln_description : str
         Technical definition of the vulnerability.
     mode : str
-        ``"binary"`` – force YES/NO answer.
-        ``"non_binary"`` – open-ended analysis.
-        ``"cot"`` – chain-of-thought (same as non_binary, CoT handled separately).
+        ``"binary"`` – YES/NO plus short justification.
+        ``"non_binary"`` / ``"cot"`` – first line MUST still be YES or NO (for scoring), then detailed analysis.
+        ``"multi_vuln"`` – not used here; see ``build_multi_vuln_prompt``.
     structured : bool
         If True, use the enhanced SYSTEM_PROMPT and request JSON output.
 
@@ -111,9 +181,18 @@ def build_prompt(
         f"To help you, find here a definition of a {vuln_name} attack: "
         f"{vuln_description}"
     )
+    if example_vulnerable:
+        context += f"\n\nVulnerable pattern example:\n{example_vulnerable}"
+    if example_fixed:
+        context += f"\n\nFixed pattern example:\n{example_fixed}"
+    hint = VULN_CRITICAL_HINTS.get(vuln_name, "")
+    if hint:
+        context += f"\n\nCRITICAL: {hint}"
     task = _TASK_QUERY_TEMPLATE.format(vuln_name=vuln_name)
     if mode == "binary":
         task += _BINARY_SUFFIX
+    elif mode in ("non_binary", "cot"):
+        task += _SCORING_FIRST_LINE_SUFFIX.format(vuln_name=vuln_name)
 
     user_content = (
         f"{context}\n\n"
@@ -242,6 +321,8 @@ def build_few_shot_prompt(
     task = _TASK_QUERY_TEMPLATE.format(vuln_name=vuln_name)
     if mode == "binary":
         task += _BINARY_SUFFIX
+    elif mode in ("non_binary", "cot"):
+        task += _SCORING_FIRST_LINE_SUFFIX.format(vuln_name=vuln_name)
 
     user_content = (
         f"{context}\n\n"
@@ -252,6 +333,54 @@ def build_few_shot_prompt(
     )
     return [
         {"role": "system", "content": _SYSTEM_INSTRUCTION},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def build_agent_reflection_prompt(
+    source_code: str,
+    vuln_name: str,
+    vuln_description: str,
+    initial_analysis: str,
+) -> list[dict]:
+    """
+    Build prompt for agent reflection step: judge whether initial analysis is correct.
+
+    Parameters
+    ----------
+    source_code : str
+        Contract source.
+    vuln_name : str
+        Vulnerability type being checked.
+    vuln_description : str
+        Definition of the vulnerability.
+    initial_analysis : str
+        First LLM's analysis/response.
+
+    Returns
+    -------
+    list[dict]
+        Chat messages for reflection/judgment step.
+    """
+    system = (
+        "You are a senior smart contract security auditor acting as a critical reviewer. "
+        "Your task: Review another auditor's analysis and decide if it is correct. "
+        "Be rigorous: reject vague or incorrect reasoning. "
+        "MANDATORY: Line 1 of your reply must be exactly the English word YES or NO (verdict). "
+        "Line 2+: brief justification."
+    )
+    hint = VULN_CRITICAL_HINTS.get(vuln_name, "")
+    hint_block = f"\nCritical pattern to check: {hint}" if hint else ""
+    user_content = (
+        f"Vulnerability type: {vuln_name}\n"
+        f"Definition: {vuln_description}{hint_block}\n\n"
+        f"Another auditor's analysis:\n{initial_analysis}\n\n"
+        f"Source code (excerpt):\n{source_code[:4000]}\n\n"
+        "Is this analysis correct? Does the contract actually have this vulnerability? "
+        "Your first line must be YES or NO only; then explain in 1-2 sentences."
+    )
+    return [
+        {"role": "system", "content": system},
         {"role": "user", "content": user_content},
     ]
 
@@ -289,4 +418,68 @@ def build_multi_vuln_prompt(
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
+    ]
+
+
+def build_batch_audit_prompt(
+    source_code: str,
+    vulns: list[dict],
+    mode: str = "non_binary",
+) -> list[dict]:
+    """
+    Build batch prompt with strict JSON schema. Includes per-vuln examples and hints.
+    """
+    mode_instruction = {
+        "binary": "Use YES/NO verdict for each vulnerability, with a concise but specific explanation.",
+        "non_binary": "Provide detailed explanation for each vulnerability, including why it applies or does not apply.",
+        "cot": "Reason step-by-step internally and provide concise final explanations.",
+        "multi_vuln": "Audit all listed vulnerabilities together and provide detailed per-vulnerability explanations.",
+    }.get(mode, "Provide detailed explanation for each vulnerability.")
+
+    vuln_blocks = []
+    for v in vulns:
+        name = v.get("name", "")
+        desc = v.get("description", "")
+        ex_v = v.get("example_vulnerable", "")
+        ex_f = v.get("example_fixed", "")
+        hint = VULN_CRITICAL_HINTS.get(name, "")
+        block = f"- **{name}**: {desc}"
+        if ex_v:
+            block += f"\n  Vulnerable pattern: {ex_v[:200]}..."
+        if ex_f:
+            block += f"\n  Fixed pattern: {ex_f[:150]}..."
+        if hint:
+            block += f"\n  CRITICAL: {hint}"
+        vuln_blocks.append(block)
+    vuln_block = "\n\n".join(vuln_blocks)
+
+    schema = {
+        "results": [
+            {
+                "vuln_name": "<must exactly match one requested vulnerability name>",
+                "verdict": "YES|NO|UNCERTAIN",
+                "confidence": 0.0,
+                "explanation": "<detailed explanation>",
+                "evidence_lines": [1, 2],
+                "recommendation": "<fix suggestion>",
+            }
+        ]
+    }
+    user_prompt = (
+        "Audit the smart contract for each selected vulnerability and return ONLY valid JSON.\n\n"
+        f"Mode: {mode}\nInstruction: {mode_instruction}\n\n"
+        "Selected vulnerabilities (with patterns and critical hints):\n"
+        f"{vuln_block}\n\n"
+        "Requirements:\n"
+        "1) Return one result object for EVERY listed vulnerability (no omissions).\n"
+        "2) Keep vuln_name exactly identical to the provided name.\n"
+        "3) verdict MUST be YES or NO when possible (binary judgment per vulnerability); use UNCERTAIN only if truly undecidable.\n"
+        "4) explanation must cite specific code and match the CRITICAL pattern.\n"
+        "5) evidence_lines should contain concrete line numbers when available, else [].\n\n"
+        f"Output schema:\n{json.dumps(schema, indent=2)}\n\n"
+        f"Source Code:\n{source_code}"
+    )
+    return [
+        {"role": "system", "content": "You are a senior smart contract security auditor. Output valid JSON only."},
+        {"role": "user", "content": user_prompt},
     ]

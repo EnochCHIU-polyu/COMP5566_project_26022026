@@ -2,6 +2,7 @@
 
 import pytest
 from phase4_evaluation.scorer import (
+    infer_verdict_for_scoring,
     _parse_binary_response,
     score_binary_result,
     compute_metrics,
@@ -10,6 +11,9 @@ from phase4_evaluation.scorer import (
 
 
 class TestParseBinaryResponse:
+    def test_alias_matches_infer(self):
+        assert infer_verdict_for_scoring is _parse_binary_response
+
     def test_yes_response(self):
         assert _parse_binary_response("YES, this contract is vulnerable") is True
 
@@ -27,6 +31,13 @@ class TestParseBinaryResponse:
 
     def test_yes_embedded(self):
         assert _parse_binary_response("YES – the withdraw() function...") is True
+
+    def test_chinese_verdict_lines(self):
+        assert infer_verdict_for_scoring("结论：否\n经分析该合约...") is False
+        assert infer_verdict_for_scoring("结论：是\n存在重入") is True
+
+    def test_english_yes_after_preamble(self):
+        assert infer_verdict_for_scoring("Here is my analysis.\nYES\nmore text") is True
 
 
 class TestScoreBinaryResult:
@@ -116,3 +127,10 @@ class TestEvaluateBatch:
         assert len(result["per_contract"]) == 1
         assert result["per_contract"][0]["contract_name"] == "ContractA"
         assert result["per_contract"][0]["counts"]["TP"] == 1
+        assert result["aggregate"].get("skipped_unparseable") == 0
+
+    def test_skipped_unparseable(self):
+        audit = self._make_result("ContractA", {"Reentrancy": "Maybe."})
+        result = evaluate_batch([audit], {"ContractA": ["Reentrancy"]})
+        assert result["aggregate"]["skipped_unparseable"] >= 1
+        assert result["aggregate"]["counts"]["TP"] == 0
