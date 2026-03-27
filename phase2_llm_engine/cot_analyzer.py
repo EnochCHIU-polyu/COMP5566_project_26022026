@@ -23,7 +23,7 @@ from phase2_llm_engine.prompt_builder import (
     build_batch_audit_prompt,
     extract_function_names,
 )
-from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
+from phase2_llm_engine.vulnerability_store import get_vulnerability_types
 from phase2_llm_engine.llm_client import query_llm
 from config import CLASSIFICATION_MODE
 
@@ -79,8 +79,9 @@ def _run_batch_audit_for_model(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> dict:
     """Run batch prompt for one model (same format as Standard mode, better detection)."""
+    vulnerability_types = get_vulnerability_types()
     vuln_set = set(vuln_filter)
-    selected = [v for v in VULNERABILITY_TYPES if v["name"] in vuln_set]
+    selected = [v for v in vulnerability_types if v["name"] in vuln_set]
     messages = build_batch_audit_prompt(source_code, selected, mode)
     raw = query_llm(messages, model=model, temperature=temperature)
     vuln_results = _parse_batch_json_response(raw, list(vuln_filter))
@@ -175,8 +176,10 @@ def analyze_contract(
     )
 
     # ── multi_vuln mode: single call for all vulns ────────────────────────
+    vulnerability_types = get_vulnerability_types()
+
     if effective_mode == "multi_vuln":
-        messages = build_multi_vuln_prompt(source_code, VULNERABILITY_TYPES)
+        messages = build_multi_vuln_prompt(source_code, vulnerability_types)
         response = query_llm(messages, model=model, temperature=temperature)
         if progress_callback:
             progress_callback(1, 1, "multi_vuln batch complete")
@@ -190,10 +193,10 @@ def analyze_contract(
         return result
 
     # ── Phase A: iterate over all 38 vulnerability types ─────────────────────
-    vulns_to_check = VULNERABILITY_TYPES
+    vulns_to_check = vulnerability_types
     if vuln_filter:
         vuln_set = set(vuln_filter)
-        vulns_to_check = [v for v in VULNERABILITY_TYPES if v["name"] in vuln_set]
+        vulns_to_check = [v for v in vulnerability_types if v["name"] in vuln_set]
     vuln_results = []
     total_vulns = len(vulns_to_check)
     judge_model = agent_judge_model or model
@@ -336,10 +339,11 @@ def analyze_contract_cascade(
         small_model,
         large_model,
     )
-    vulns_to_check = VULNERABILITY_TYPES
+    vulnerability_types = get_vulnerability_types()
+    vulns_to_check = vulnerability_types
     if vuln_filter:
         vs = set(vuln_filter)
-        vulns_to_check = [v for v in VULNERABILITY_TYPES if v["name"] in vs]
+        vulns_to_check = [v for v in vulnerability_types if v["name"] in vs]
 
     vuln_results = []
     total = len(vulns_to_check)
@@ -547,10 +551,11 @@ def run_multi_llm_audit(
             all_results.append(_run_one_model(model))
 
     # Aggregate vuln_results (use vuln names from first result)
+    vulnerability_types = get_vulnerability_types()
     vulns_to_aggregate = (
         [r["vuln_name"] for r in all_results[0]["vuln_results"]]
         if all_results and all_results[0].get("vuln_results")
-        else [v["name"] for v in VULNERABILITY_TYPES]
+        else [v["name"] for v in vulnerability_types]
     )
     aggregated_vuln_results = []
     for vuln_name in vulns_to_aggregate:

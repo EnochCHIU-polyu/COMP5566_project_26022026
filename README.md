@@ -164,7 +164,24 @@ SELF_CHECK_CONFIDENCE_THRESHOLD=0.6
 KEYWORD_PREFILTER_ENABLED=true
 BATCH_VULNS_PER_PROMPT=8
 FEW_SHOT_EXAMPLES=true
+
+# ── Shared DB (Supabase) ──────────────────────────────────────────
+DATA_BACKEND=local             # local | supabase
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_KEY=<anon-or-service-role-key>
+SUPABASE_CONTRACTS_TABLE=contracts
+SUPABASE_SUBMISSIONS_TABLE=flagged_contract_submissions
+SUPABASE_VULNERABILITIES_TABLE=vulnerability_types
 ```
+
+### Supabase bootstrap (for shared datasets)
+
+1. Create a Supabase project.
+2. Open SQL Editor and run [supabase/schema.sql](supabase/schema.sql).
+3. Set `DATA_BACKEND=supabase` in `.env` to make loaders prefer shared DB.
+4. Keep `.env` private; do not commit real keys.
+
+For first setup, copy [.env.example](.env.example) to `.env` and fill in values.
 
 ### GitHub Models quick check
 
@@ -183,6 +200,14 @@ client = OpenAI(
 If you update `.env`, restart your Python/Streamlit process so environment variables are reloaded.
 
 All settings can also be changed directly in `config.py`.
+
+### Streamlit DB workflow
+
+- In the **Benchmark** tab, enable **Use shared Supabase dataset** to load contracts from DB first.
+- In the **Flag & Review** tab, users can submit fully detailed vulnerable-contract reports to a pending queue.
+- Reviewer can mark submissions `under_review` / `rejected`, or **Approve + Publish** to append into shared vulnerable contracts.
+- Vulnerability catalog is loaded from Supabase table `vulnerability_types` (with local fallback).
+- Audit now always runs full-catalog detection for every contract (no manual vulnerability selection UI).
 
 ---
 
@@ -280,9 +305,27 @@ python main.py report --results results.json --output report.md
 python main.py report --results results.json --output report.html --format html
 ```
 
+### 6.5 Seed Vulnerability Catalog to Supabase
+
+If your `vulnerability_types` table is empty, seed it from local
+`phase2_llm_engine/vulnerability_types.py`:
+
+```bash
+python main.py seed-vulnerability-catalog
+```
+
+Force upsert all local rows even when DB already has data:
+
+```bash
+python main.py seed-vulnerability-catalog --force
+```
+
+If RLS blocks insert/update with anon key, set `SUPABASE_SERVICE_ROLE_KEY` in `.env`
+for one-time seeding, run the command, then remove it from local environment.
+
 ---
 
-### 6.5 Launch the Streamlit Web UI
+### 6.6 Launch the Streamlit Web UI
 
 ```bash
 streamlit run phase4_evaluation/ui_app.py

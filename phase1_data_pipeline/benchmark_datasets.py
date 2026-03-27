@@ -12,6 +12,9 @@ import logging
 import hashlib
 from typing import Optional
 
+from config import DATA_BACKEND
+from phase1_data_pipeline.supabase_store import fetch_contracts, is_supabase_enabled
+
 logger = logging.getLogger(__name__)
 
 BENCHMARKS_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'benchmarks')
@@ -210,7 +213,7 @@ def download_solidifi(output_dir: Optional[str] = None) -> list[dict]:
     return []
 
 
-def load_benchmark(dataset: str = "smartbugs") -> list[dict]:
+def load_benchmark(dataset: str = "smartbugs", prefer_supabase: bool = False) -> list[dict]:
     """
     Load a benchmark dataset by name.
 
@@ -224,6 +227,16 @@ def load_benchmark(dataset: str = "smartbugs") -> list[dict]:
     list[dict]
         List of contract records.
     """
+    if (prefer_supabase or DATA_BACKEND == "supabase") and is_supabase_enabled():
+        if dataset in {"smartbugs", "solidifi"}:
+            shared = fetch_contracts(source=dataset)
+            if shared:
+                return shared
+        if dataset == "all":
+            shared_all = fetch_contracts()
+            if shared_all:
+                return shared_all
+
     if dataset == "smartbugs":
         return download_smartbugs()
     if dataset == "solidifi":

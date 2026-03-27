@@ -31,15 +31,24 @@ import streamlit as st
 import pandas as pd
 
 from config import (
+    DATA_BACKEND,
     DEFAULT_MODEL,
     TEMPERATURE,
     CLASSIFICATION_MODE,
     API_PAUSE_SECONDS,
     BATCH_VULNS_PER_PROMPT,
 )
+from phase1_data_pipeline.supabase_store import (
+    create_flagged_submission,
+    get_submission,
+    is_supabase_enabled,
+    list_pending_submissions,
+    publish_submission_to_contracts,
+    set_submission_status,
+)
 from phase1_data_pipeline.token_counter import count_tokens
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
-from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
+from phase2_llm_engine.vulnerability_store import get_vulnerability_names, get_vulnerability_types
 from phase2_llm_engine.llm_client import query_llm
 from phase2_llm_engine.cot_analyzer import analyze_contract, analyze_contract_cascade, run_multi_llm_audit
 from phase4_evaluation.scorer import compute_metrics, evaluate_batch
@@ -60,6 +69,9 @@ PIPELINE_LABELS = {
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+vuln_names = get_vulnerability_names()
+vuln_catalog_count = max(1, len(vuln_names))
 
 
 def _extract_flagged_lines(response: str, source_code: str) -> list[int]:
@@ -243,7 +255,8 @@ def _run_batched_checks(
     status_text,
 ) -> list[dict]:
     """Run vulnerability checks in batches and split JSON output back per vulnerability."""
-    vuln_by_name = {v["name"]: v for v in VULNERABILITY_TYPES}
+    vuln_catalog = get_vulnerability_types()
+    vuln_by_name = {v["name"]: v for v in vuln_catalog}
     selected_vulns = [vuln_by_name[name] for name in selected_vuln_names if name in vuln_by_name]
     chunks = _chunk_list([v["name"] for v in selected_vulns], max(1, batch_size))
 
@@ -298,6 +311,44 @@ def _run_batched_checks(
 
     return results
 
+
+def _infer_suspected_vulnerabilities(
+    source_code: str,
+    supporting_evidence: str,
+    max_items: int = 5,
+) -> list[str]:
+    """Infer likely vulnerabilities from source/evidence using catalog keywords."""
+    text = f"{source_code}\n{supporting_evidence}".lower()
+    if not text.strip():
+        return []
+
+    catalog = get_vulnerability_types()
+    scored: list[tuple[int, str]] = []
+
+    for item in catalog:
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+
+        score = 0
+        keywords = item.get("detection_keywords", [])
+        if isinstance(keywords, list):
+            for kw in keywords:
+                kw_text = str(kw).strip().lower()
+                if kw_text and kw_text in text:
+                    score += 2
+
+        name_tokens = [tok for tok in re.split(r"[^a-z0-9]+", name.lower()) if len(tok) > 2]
+        for token in name_tokens:
+            if token in text:
+                score += 1
+
+        if score > 0:
+            scored.append((score, name))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [name for _, name in scored[:max(1, max_items)]]
+
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
@@ -314,7 +365,7 @@ st.caption(
 )
 st.info(
     "Workflow: (1) Paste or upload a contract, (2) choose model, mode, and pipeline in the sidebar, "
-    "(3) select vulnerability types, (4) Run Audit, (5) review results — prompts require **YES/NO on line 1** "
+    "(3) Run Audit, (4) review results — prompts require **YES/NO on line 1** "
     "for per-vulnerability checks."
 )
 
@@ -452,8 +503,8 @@ with st.sidebar:
     batch_size = st.slider(
         "Batch Size (vulnerabilities per LLM call)",
         min_value=1,
-        max_value=12,
-        value=max(1, min(BATCH_VULNS_PER_PROMPT, 12)),
+        max_value=vuln_catalog_count,
+        value=max(1, min(BATCH_VULNS_PER_PROMPT, vuln_catalog_count)),
         step=1,
         help="Larger batch = fewer API calls and faster runs, but harder JSON parsing.",
         disabled=audit_pipeline != "standard",
@@ -462,6 +513,15 @@ with st.sidebar:
     st.caption(
         "Run locally: `streamlit run phase4_evaluation/ui_app.py` → http://localhost:8501"
     )
+
+    st.markdown("---")
+    st.subheader("🗄️ Shared DB")
+    db_ready = is_supabase_enabled()
+    st.caption(f"Backend mode: `{DATA_BACKEND}`")
+    if db_ready:
+        st.success("Supabase configured")
+    else:
+        st.warning("Supabase not configured; local files fallback is active.")
 
     # Current workflow summary (sidebar)
     _flow_parts = [
@@ -530,7 +590,9 @@ agent_mode_effective = bool(use_agent) and mode != "multi_vuln"
 # Main area – contract input
 # ---------------------------------------------------------------------------
 
-tab_paste, tab_upload, tab_benchmark = st.tabs(["📝 Paste Code", "📂 Upload File", "📊 Benchmark"])
+tab_paste, tab_upload, tab_benchmark, tab_flags = st.tabs(
+    ["📝 Paste Code", "📂 Upload File", "📊 Benchmark", "🚩 Flag & Review"]
+)
 
 source_code_input = ""
 
@@ -560,8 +622,15 @@ with tab_benchmark:
 
     bench_dataset = st.selectbox("Dataset", ["smartbugs", "solidifi"], index=0)
     bench_limit = st.number_input("Load first N contracts", min_value=1, max_value=200, value=3, step=1)
+    prefer_shared_db = st.toggle(
+        "Use shared Supabase dataset",
+        value=(DATA_BACKEND == "supabase"),
+        disabled=not is_supabase_enabled(),
+        help="When enabled, benchmark loads from Supabase first and falls back to local files if no rows are found.",
+    )
+
     if st.button("📥 Load Benchmark"):
-        contracts = load_benchmark(bench_dataset)
+        contracts = load_benchmark(bench_dataset, prefer_supabase=prefer_shared_db)
         if not contracts:
             st.error(
                 f"Dataset '{bench_dataset}' not found. Clone into "
@@ -699,6 +768,131 @@ with tab_benchmark:
             del st.session_state.benchmark_audit_results
             st.rerun()
 
+with tab_flags:
+    st.subheader("🚩 Flag a Vulnerable Contract")
+    if not is_supabase_enabled():
+        st.warning("Supabase is not configured. Add SUPABASE_URL and SUPABASE_KEY in .env to enable shared submissions.")
+
+    with st.form("flag_contract_form"):
+        reporter_name = st.text_input("Reporter name")
+        reporter_email = st.text_input("Reporter email")
+        contract_name = st.text_input("Contract name")
+        contract_address = st.text_input("Contract address (optional)")
+        chain_name = st.text_input("Chain / Network (optional)")
+        tx_hash = st.text_input("Reference TX hash (optional)")
+        severity_claim = st.selectbox("Claimed severity", ["critical", "high", "medium", "low"])
+        supporting_evidence = st.text_area("Supporting evidence / reasoning", height=140)
+        suggested_fix = st.text_area("Suggested fix (optional)", height=100)
+        submitted_source_code = st.text_area("Contract source code", height=220)
+        inferred_suspected_vulns = _infer_suspected_vulnerabilities(
+            source_code=submitted_source_code,
+            supporting_evidence=supporting_evidence,
+        )
+        st.caption(
+            "Suspected vulnerability types are auto-inferred from your evidence and source code "
+            "for reviewer triage."
+        )
+        if inferred_suspected_vulns:
+            st.write("Auto-inferred suspects:", ", ".join(inferred_suspected_vulns))
+        else:
+            st.write("Auto-inferred suspects: none")
+
+        submit_flag = st.form_submit_button("Submit for audit review")
+
+    if submit_flag:
+        missing_fields = []
+        if not reporter_name.strip():
+            missing_fields.append("Reporter name")
+        if not reporter_email.strip():
+            missing_fields.append("Reporter email")
+        elif not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", reporter_email.strip()):
+            missing_fields.append("Reporter email (invalid format)")
+        if not contract_name.strip():
+            missing_fields.append("Contract name")
+        if not supporting_evidence.strip():
+            missing_fields.append("Supporting evidence")
+        if not submitted_source_code.strip():
+            missing_fields.append("Contract source code")
+
+        if missing_fields:
+            st.error("Missing required fields: " + ", ".join(missing_fields))
+        else:
+            inferred_suspected_vulns = _infer_suspected_vulnerabilities(
+                source_code=submitted_source_code,
+                supporting_evidence=supporting_evidence,
+            )
+            ok = create_flagged_submission(
+                {
+                    "reporter_name": reporter_name.strip(),
+                    "reporter_email": reporter_email.strip(),
+                    "contract_name": contract_name.strip(),
+                    "contract_address": contract_address.strip() or None,
+                    "chain_name": chain_name.strip() or None,
+                    "tx_hash": tx_hash.strip() or None,
+                    "severity_claim": severity_claim,
+                    "suspected_vulnerability": inferred_suspected_vulns,
+                    "supporting_evidence": supporting_evidence.strip(),
+                    "suggested_fix": suggested_fix.strip() or None,
+                    "source_code": submitted_source_code,
+                }
+            )
+            if ok:
+                suspects_text = ", ".join(inferred_suspected_vulns) if inferred_suspected_vulns else "none"
+                st.success(f"Submission created with status 'pending'. Auto-inferred suspects: {suspects_text}.")
+            else:
+                st.error("Failed to submit. Check Supabase config, table schema, and RLS policies.")
+
+    st.markdown("---")
+    st.subheader("🧾 Pending review queue")
+    pending = list_pending_submissions(limit=100)
+    if pending:
+        st.dataframe(pd.DataFrame(pending), use_container_width=True)
+
+        st.markdown("### Moderator actions")
+        selected_submission_id = st.selectbox(
+            "Select pending submission",
+            options=[str(row.get("id")) for row in pending],
+            index=0,
+        )
+        notes = st.text_area("Reviewer notes", height=100, key="moderator_notes")
+
+        if selected_submission_id:
+            selected_row = get_submission(selected_submission_id)
+            if selected_row:
+                with st.expander("Submission detail", expanded=False):
+                    st.json(selected_row)
+
+        mcol1, mcol2, mcol3 = st.columns(3)
+        with mcol1:
+            if st.button("Mark Under Review", key="mark_under_review"):
+                ok = set_submission_status(selected_submission_id, "under_review", notes)
+                if ok:
+                    st.success("Submission moved to under_review.")
+                    st.rerun()
+                else:
+                    st.error("Failed to update status.")
+        with mcol2:
+            if st.button("Reject", key="reject_submission"):
+                ok = set_submission_status(selected_submission_id, "rejected", notes)
+                if ok:
+                    st.warning("Submission rejected.")
+                    st.rerun()
+                else:
+                    st.error("Failed to update status.")
+        with mcol3:
+            if st.button("Approve + Publish", key="approve_publish_submission"):
+                published = publish_submission_to_contracts(selected_submission_id)
+                status_ok = set_submission_status(selected_submission_id, "approved", notes)
+                if published and status_ok:
+                    st.success("Submission approved and published to shared vulnerable dataset.")
+                    st.rerun()
+                elif status_ok:
+                    st.error("Status updated to approved, but publishing failed. Check contracts table permissions.")
+                else:
+                    st.error("Approval failed.")
+    else:
+        st.caption("No pending submissions found (or Supabase unavailable).")
+
 source_code = source_code_input
 
 # ---------------------------------------------------------------------------
@@ -716,37 +910,12 @@ if source_code:
         )
     source_code = preprocessed["source_code"]
 
-# ---------------------------------------------------------------------------
-# Vulnerability selection
-# ---------------------------------------------------------------------------
-
-st.subheader("🔍 Vulnerability Selection")
-
-vuln_names = [v["name"] for v in VULNERABILITY_TYPES]
-if "selected_vulns" not in st.session_state:
-    st.session_state.selected_vulns = vuln_names[:5]
-
-quick_col1, quick_col2, quick_col3 = st.columns(3)
-with quick_col1:
-    if st.button("Top 5", use_container_width=True):
-        st.session_state.selected_vulns = vuln_names[:5]
-        st.rerun()
-with quick_col2:
-    if st.button("Select All", use_container_width=True):
-        st.session_state.selected_vulns = vuln_names
-        st.rerun()
-with quick_col3:
-    if st.button("Clear", use_container_width=True):
-        st.session_state.selected_vulns = []
-        st.rerun()
-
-selected_vulns = st.multiselect(
-    "Select vulnerability types to check:",
-    vuln_names,
-    key="selected_vulns",
+effective_selected_vulns = vuln_names
+st.subheader("🔍 Vulnerability Coverage")
+st.info(
+    "System will always run full vulnerability detection for every contract. "
+    f"Current catalog size: {len(effective_selected_vulns)}"
 )
-
-effective_selected_vulns = selected_vulns
 
 estimated_batches = (
     max(1, math.ceil(len(effective_selected_vulns) / max(1, batch_size)))
@@ -774,13 +943,10 @@ if not source_code:
 
 _audit_disabled = (
     not source_code
-    or not effective_selected_vulns
     or (audit_pipeline == "multi_llm" and not multi_models)
 )
 if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
-    if not effective_selected_vulns:
-        st.error("Please select at least one vulnerability type.")
-    elif audit_pipeline == "multi_llm" and not multi_models:
+    if audit_pipeline == "multi_llm" and not multi_models:
         st.error("Multi-LLM requires at least one model in the sidebar.")
     else:
         logger.info(

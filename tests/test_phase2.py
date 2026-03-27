@@ -3,7 +3,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
+from vulnerability_types import VULNERABILITY_TYPES
+import phase2_llm_engine.vulnerability_store as vulnerability_store
 from phase2_llm_engine.prompt_builder import (
     build_prompt,
     build_cot_function_prompt,
@@ -86,3 +87,60 @@ class TestPromptBuilder:
         messages = build_prompt("src", "Reentrancy", "desc")
         system_content = messages[0]["content"]
         assert "smart contract auditor" in system_content.lower()
+
+
+class _FakeResponse:
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeQuery:
+    def __init__(self, data):
+        self._data = data
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        return _FakeResponse(self._data)
+
+
+class _FakeClient:
+    def __init__(self, data):
+        self._data = data
+
+    def table(self, _name):
+        return _FakeQuery(self._data)
+
+
+class TestVulnerabilityStore:
+    def test_get_vulnerability_types_local_fallback(self, monkeypatch):
+        monkeypatch.setattr(vulnerability_store, "_get_db_client", lambda: None)
+        loaded = vulnerability_store.get_vulnerability_types()
+        assert len(loaded) == len(VULNERABILITY_TYPES)
+        assert loaded[0]["name"]
+
+    def test_get_vulnerability_types_from_db(self, monkeypatch):
+        fake_rows = [
+            {
+                "name": "Reentrancy",
+                "description": "desc",
+                "swc_id": "SWC-107",
+                "severity_default": "critical",
+                "example_vulnerable": "bad",
+                "example_fixed": "good",
+                "detection_keywords": [".call{"],
+                "cwe_id": "CWE-841",
+            }
+        ]
+        monkeypatch.setattr(vulnerability_store, "_seed_from_local_if_empty", lambda _client: None)
+        monkeypatch.setattr(vulnerability_store, "_get_db_client", lambda: _FakeClient(fake_rows))
+        loaded = vulnerability_store.get_vulnerability_types()
+        assert len(loaded) == 1
+        assert loaded[0]["name"] == "Reentrancy"

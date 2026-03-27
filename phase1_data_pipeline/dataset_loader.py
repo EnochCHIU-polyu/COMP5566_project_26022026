@@ -8,7 +8,12 @@ and the mutation-testing dataset of synthetic contracts.
 import os
 import json
 from typing import Optional
-from config import VULNERABLE_CONTRACTS_DIR, SYNTHETIC_CONTRACTS_DIR
+from config import (
+    DATA_BACKEND,
+    VULNERABLE_CONTRACTS_DIR,
+    SYNTHETIC_CONTRACTS_DIR,
+)
+from phase1_data_pipeline.supabase_store import fetch_contracts, is_supabase_enabled
 
 
 def load_contracts_from_dir(directory: str) -> list[dict]:
@@ -65,9 +70,17 @@ def load_contracts_from_dir(directory: str) -> list[dict]:
 
 def load_vulnerable_contracts() -> list[dict]:
     """Load the curated dataset of 52 known-vulnerable DeFi contracts."""
+    if DATA_BACKEND == "supabase" and is_supabase_enabled():
+        shared = fetch_contracts(source="vulnerable")
+        if shared:
+            return shared
     return load_contracts_from_dir(VULNERABLE_CONTRACTS_DIR)
 
 
 def load_synthetic_contracts() -> list[dict]:
     """Load the mutation-testing dataset of synthetic contracts."""
+    if DATA_BACKEND == "supabase" and is_supabase_enabled():
+        shared = fetch_contracts(source="synthetic")
+        if shared:
+            return shared
     return load_contracts_from_dir(SYNTHETIC_CONTRACTS_DIR)

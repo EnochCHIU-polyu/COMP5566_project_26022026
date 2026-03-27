@@ -186,6 +186,17 @@ def _generate_report(args: argparse.Namespace) -> None:
     print(f"Report written to {output_path}")
 
 
+def _seed_vulnerability_catalog(args: argparse.Namespace) -> None:
+    from phase2_llm_engine.vulnerability_store import seed_vulnerability_catalog
+
+    summary = seed_vulnerability_catalog(force=bool(getattr(args, "force", False)))
+    status = "OK" if summary.get("ok") else "FAILED"
+    print(f"[{status}] {summary.get('message', '')}")
+    if "existing" in summary and summary.get("existing") is not None:
+        print(f"Existing rows: {summary.get('existing')}")
+    print(f"Seeded rows: {summary.get('seeded', 0)}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Smart Contract Vulnerability Detection Framework"
@@ -312,6 +323,17 @@ def main() -> None:
         help="Report output format",
     )
 
+    # ── seed-vulnerability-catalog sub-command ─────────────────────────────
+    seed_vuln_parser = subparsers.add_parser(
+        "seed-vulnerability-catalog",
+        help="Seed vulnerability_types catalog from local file into Supabase",
+    )
+    seed_vuln_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Upsert all local rows even when DB table already has data",
+    )
+
     args = parser.parse_args()
 
     if args.command == "audit":
@@ -324,6 +346,8 @@ def main() -> None:
         _download_benchmarks(args)
     elif args.command == "report":
         _generate_report(args)
+    elif args.command == "seed-vulnerability-catalog":
+        _seed_vulnerability_catalog(args)
     else:
         parser.print_help()
         sys.exit(0)

@@ -8,6 +8,8 @@ import pytest
 from phase1_data_pipeline.token_counter import count_tokens, truncate_to_token_limit
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase1_data_pipeline.dataset_loader import load_contracts_from_dir
+import phase1_data_pipeline.dataset_loader as dataset_loader_mod
+import phase1_data_pipeline.benchmark_datasets as benchmark_mod
 from phase1_data_pipeline.synthetic_contracts import (
     generate_synthetic_contracts,
     save_synthetic_contracts,
@@ -121,3 +123,35 @@ class TestSyntheticContracts:
         generate_synthetic_contracts(num_vulns=15)
         for i, t in enumerate(_SECURE_TEMPLATES):
             assert t["source_code"] == original_sources[i]
+
+
+class TestSupabaseIntegration:
+    def test_load_vulnerable_contracts_prefers_supabase(self, monkeypatch):
+        fake_rows = [{"name": "DBContract", "source_code": "pragma solidity ^0.8.0;", "labels": []}]
+        monkeypatch.setattr(dataset_loader_mod, "DATA_BACKEND", "supabase")
+        monkeypatch.setattr(dataset_loader_mod, "is_supabase_enabled", lambda: True)
+        monkeypatch.setattr(dataset_loader_mod, "fetch_contracts", lambda source=None: fake_rows)
+
+        contracts = dataset_loader_mod.load_vulnerable_contracts()
+        assert contracts == fake_rows
+
+    def test_load_vulnerable_contracts_falls_back_to_local(self, tmp_path, monkeypatch):
+        sol_file = tmp_path / "LocalOnly.sol"
+        sol_file.write_text("pragma solidity ^0.8.0;")
+
+        monkeypatch.setattr(dataset_loader_mod, "DATA_BACKEND", "supabase")
+        monkeypatch.setattr(dataset_loader_mod, "VULNERABLE_CONTRACTS_DIR", str(tmp_path))
+        monkeypatch.setattr(dataset_loader_mod, "is_supabase_enabled", lambda: True)
+        monkeypatch.setattr(dataset_loader_mod, "fetch_contracts", lambda source=None: [])
+
+        contracts = dataset_loader_mod.load_vulnerable_contracts()
+        assert len(contracts) == 1
+        assert contracts[0]["name"] == "LocalOnly"
+
+    def test_load_benchmark_prefers_supabase_when_requested(self, monkeypatch):
+        fake_rows = [{"name": "SB", "source_code": "pragma solidity ^0.8.0;", "labels": []}]
+        monkeypatch.setattr(benchmark_mod, "is_supabase_enabled", lambda: True)
+        monkeypatch.setattr(benchmark_mod, "fetch_contracts", lambda source=None: fake_rows)
+
+        contracts = benchmark_mod.load_benchmark("smartbugs", prefer_supabase=True)
+        assert contracts == fake_rows

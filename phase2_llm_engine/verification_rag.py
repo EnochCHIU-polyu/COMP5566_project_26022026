@@ -23,11 +23,13 @@ _CORPUS_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "rag_corpus"
 @lru_cache(maxsize=1)
 def _build_corpus_texts() -> tuple[list[str], list[str]]:
     """Return (list of document strings, parallel list of short labels)."""
-    from phase2_llm_engine.vulnerability_types import VULNERABILITY_TYPES
+    from phase2_llm_engine.vulnerability_store import get_vulnerability_types
+
+    vulnerability_types = get_vulnerability_types()
 
     docs: list[str] = []
     labels: list[str] = []
-    for v in VULNERABILITY_TYPES:
+    for v in vulnerability_types:
         parts = [
             v.get("name", ""),
             v.get("description", ""),

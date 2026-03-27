@@ -18,13 +18,13 @@ This package scores audit results, runs batch experiment grids, generates audit 
 
 ## 1. Module Overview
 
-| File | Purpose |
-|------|---------|
-| `scorer.py` | TP/FP/TN/FN, Precision, Recall, F1, AUC-ROC, PR-AUC, per-vuln breakdown, calibration |
-| `experiment_runner.py` | Batch grid runner — benchmark × config grid → results |
-| `report_generator.py` | Generate markdown / HTML audit reports |
-| `results_logger.py` | Persist predictions, metrics, timing, and comparison CSV |
-| `ui_app.py` | Streamlit HITL web interface |
+| File                   | Purpose                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `scorer.py`            | TP/FP/TN/FN, Precision, Recall, F1, AUC-ROC, PR-AUC, per-vuln breakdown, calibration |
+| `experiment_runner.py` | Batch grid runner — benchmark × config grid → results                                |
+| `report_generator.py`  | Generate markdown / HTML audit reports                                               |
+| `results_logger.py`    | Persist predictions, metrics, timing, and comparison CSV                             |
+| `ui_app.py`            | Streamlit HITL web interface                                                         |
 
 ---
 
@@ -159,12 +159,12 @@ results = run_grid(
 
 Each config run is saved to `results/{config_name}_{timestamp}/` containing:
 
-| File | Contents |
-|------|---------|
-| `config.json` | TuningConfig snapshot |
+| File               | Contents                           |
+| ------------------ | ---------------------------------- |
+| `config.json`      | TuningConfig snapshot              |
 | `predictions.json` | Per-contract, per-vuln predictions |
-| `metrics.json` | Aggregated scores |
-| `timing.json` | Per-contract latency |
+| `metrics.json`     | Aggregated scores                  |
+| `timing.json`      | Per-contract latency               |
 
 ---
 
@@ -179,7 +179,7 @@ Generates professional audit reports from `analyze_contract()` output.
 1. **Executive Summary** — total findings, severity breakdown table, risk score
 2. **Findings** — sorted by severity; each finding shows severity, affected lines, description, recommendation
 3. **Methodology** — model, temperature, mode, number of checks run
-4. *(Optional)* **Appendix** — full raw LLM responses
+4. _(Optional)_ **Appendix** — full raw LLM responses
 
 ### Usage
 
@@ -216,12 +216,12 @@ save_report(
 ### Severity icons
 
 | Severity | Icon |
-|----------|------|
-| CRITICAL | 🔴 |
-| HIGH | 🟠 |
-| MEDIUM | 🟡 |
-| LOW | 🔵 |
-| INFO | ⚪ |
+| -------- | ---- |
+| CRITICAL | 🔴   |
+| HIGH     | 🟠   |
+| MEDIUM   | 🟡   |
+| LOW      | 🔵   |
+| INFO     | ⚪   |
 
 ---
 
@@ -293,19 +293,20 @@ streamlit run phase4_evaluation/ui_app.py
 
 ### Features
 
-| Feature | Description |
-|---------|-------------|
-| **Contract input** | Paste Solidity code or upload `.sol` / `.json` file |
-| **Token counter** | Automatically displayed; warns if contract is truncated |
-| **Vulnerability selector** | Pick any subset of the 38 types, or run all 38 at once |
-| **Model selector** | GPT-4o, GPT-4-turbo, GPT-3.5-turbo, Claude-3-Opus, Claude-3-Sonnet, DeepSeek-v3.2, or enter any custom model string |
-| **Temperature slider** | 0.0 – 1.0 |
-| **Classification mode** | Binary (YES/NO) or Non-Binary (detailed) |
-| **Progress bar** | Shows progress through selected vulnerability types |
-| **Result panels** | 🔴 / 🟢 per vulnerability, collapsible |
-| **Line highlighting** | Flagged source lines shown in red inside a code viewer |
-| **HITL scoring** | True Positive / False Positive / False Negative buttons |
-| **Live metrics** | Sidebar shows cumulative F1, Precision, Recall |
+| Feature                    | Description                                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Contract input**         | Paste Solidity code or upload `.sol` / `.json` file                                                        |
+| **Token counter**          | Automatically displayed; warns if contract is truncated                                                    |
+| **Vulnerability coverage** | Full-catalog scan is always on; catalog is loaded dynamically from Supabase (with local fallback)          |
+| **Model selector**         | `deepseek-v3.2`, `gpt-4o`, `gpt-4o-mini`, or custom model string                                           |
+| **Temperature slider**     | 0.0 – 1.0                                                                                                  |
+| **Classification mode**    | Binary (YES/NO) or Non-Binary (detailed)                                                                   |
+| **Progress bar**           | Shows progress through selected vulnerability types                                                        |
+| **Result panels**          | 🔴 / 🟢 per vulnerability, collapsible                                                                     |
+| **Line highlighting**      | Flagged source lines shown in red inside a code viewer                                                     |
+| **HITL scoring**           | True Positive / False Positive / False Negative buttons                                                    |
+| **Live metrics**           | Sidebar shows cumulative F1, Precision, Recall                                                             |
+| **Flag + review queue**    | Reporter submits contract + evidence; suspected vulnerability types are auto-inferred for moderator triage |
 
 ### Screenshot workflow
 
@@ -313,8 +314,8 @@ streamlit run phase4_evaluation/ui_app.py
 1. Paste a Solidity contract in the "📝 Paste Code" tab
    (or upload a .sol / .json file)
 
-2. Select vulnerability types in the "🔍 Vulnerability Selection" section
-   → tick "Run all 38 vulnerability types" for a full scan
+2. System automatically runs all vulnerability checks (full catalog)
+    → no manual vulnerability selection is required
 
 3. Configure the model, temperature, and mode in the sidebar
 

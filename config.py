@@ -41,3 +41,20 @@ BATCH_VULNS_PER_PROMPT: int = int(os.getenv("BATCH_VULNS_PER_PROMPT", "8"))
 DATA_DIR: str = os.path.join(os.path.dirname(__file__), "data")
 VULNERABLE_CONTRACTS_DIR: str = os.path.join(DATA_DIR, "vulnerable_contracts")
 SYNTHETIC_CONTRACTS_DIR: str = os.path.join(DATA_DIR, "synthetic_contracts")
+
+# ── Supabase Settings ────────────────────────────────────────────────────────
+SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+# Set DATA_BACKEND=supabase to prefer shared DB records; local files remain fallback.
+DATA_BACKEND: str = os.getenv("DATA_BACKEND", "local").strip().lower()
+# Table names are configurable to support staging/prod schemas without code changes.
+SUPABASE_CONTRACTS_TABLE: str = os.getenv("SUPABASE_CONTRACTS_TABLE", "contracts")
+SUPABASE_SUBMISSIONS_TABLE: str = os.getenv(
+	"SUPABASE_SUBMISSIONS_TABLE",
+	"flagged_contract_submissions",
+)
+SUPABASE_VULNERABILITIES_TABLE: str = os.getenv(
+	"SUPABASE_VULNERABILITIES_TABLE",
+	"vulnerability_types",
+)
