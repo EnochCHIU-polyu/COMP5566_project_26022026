@@ -31,27 +31,42 @@ create table if not exists public.vulnerability_types (
 
 create table if not exists public.flagged_contract_submissions (
     id uuid primary key default gen_random_uuid(),
-    reporter_name text not null,
-    reporter_email text not null,
-    contract_name text not null,
-    contract_address text,
-    chain_name text,
-    tx_hash text,
-    severity_claim text not null,
-    suspected_vulnerability jsonb not null default '[]'::jsonb,
-    supporting_evidence text not null,
-    suggested_fix text,
-    source_code text not null,
-    status text not null default 'pending',
+    description text not null,
+    example_vulnerable text not null,
+    attack_steps jsonb not null default '[]'::jsonb,
+    status text not null default 'pending_review',
     reviewer_notes text,
     reviewed_at timestamptz,
     created_at timestamptz not null default now(),
     constraint chk_submission_status
-        check (status in ('pending', 'under_review', 'approved', 'rejected', 'needs_info'))
+        check (status in ('pending_review', 'under_review', 'approved', 'rejected', 'needs_info'))
+);
+
+create table if not exists public.audit_runs (
+    id uuid primary key,
+    status text not null default 'queued',
+    stage text not null default 'queued',
+    metadata jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint chk_audit_run_status check (status in ('queued', 'running', 'completed', 'failed')),
+    constraint chk_audit_run_stage check (stage in ('queued', 'slither', 'llm', 'completed', 'failed'))
+);
+
+create table if not exists public.audit_events (
+    id bigint generated always as identity primary key,
+    audit_id uuid not null references public.audit_runs(id) on delete cascade,
+    event text not null,
+    stage text not null,
+    seq integer not null,
+    ts timestamptz not null default now(),
+    payload jsonb not null default '{}'::jsonb,
+    constraint uq_audit_event_seq unique(audit_id, seq)
 );
 
 create index if not exists idx_flagged_status on public.flagged_contract_submissions(status);
 create index if not exists idx_flagged_created_at on public.flagged_contract_submissions(created_at desc);
+create index if not exists idx_audit_events_audit_id_seq on public.audit_events(audit_id, seq);
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -71,6 +86,8 @@ for each row execute function public.set_updated_at();
 alter table public.contracts enable row level security;
 alter table public.flagged_contract_submissions enable row level security;
 alter table public.vulnerability_types enable row level security;
+alter table public.audit_runs enable row level security;
+alter table public.audit_events enable row level security;
 
 -- Public read for shared dataset
 drop policy if exists contracts_read_all on public.contracts;
@@ -127,6 +144,38 @@ drop policy if exists flagged_update_authenticated on public.flagged_contract_su
 create policy flagged_update_authenticated
 on public.flagged_contract_submissions
 for update
+to authenticated
+using (true)
+with check (true);
+
+-- Public read for audit status stream/snapshots
+drop policy if exists audit_runs_read_all on public.audit_runs;
+create policy audit_runs_read_all
+on public.audit_runs
+for select
+to anon, authenticated
+using (true);
+
+drop policy if exists audit_events_read_all on public.audit_events;
+create policy audit_events_read_all
+on public.audit_events
+for select
+to anon, authenticated
+using (true);
+
+-- Backend/service role or authenticated writers can persist audit runs/events
+drop policy if exists audit_runs_write_authenticated on public.audit_runs;
+create policy audit_runs_write_authenticated
+on public.audit_runs
+for all
+to authenticated
+using (true)
+with check (true);
+
+drop policy if exists audit_events_write_authenticated on public.audit_events;
+create policy audit_events_write_authenticated
+on public.audit_events
+for all
 to authenticated
 using (true)
 with check (true);
