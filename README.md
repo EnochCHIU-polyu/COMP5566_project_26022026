@@ -12,6 +12,7 @@ It uses GPT-4 / Claude / DeepSeek to systematically check a contract against **3
    - [Frontend/Backend App Summary](#21-frontendbackend-app-summary)
 3. [Requirements](#3-requirements)
 4. [Installation](#4-installation)
+   - [Run Frontend + Backend (Full-Stack)](#41-run-frontend--backend-full-stack)
 5. [Configuration](#5-configuration)
 6. [Usage](#6-usage)
    - [Audit a Contract (CLI)](#61-audit-a-contract-via-cli)
@@ -84,6 +85,24 @@ COMP5566_project_26022026/
 │   ├── vulnerable_contracts/              # Known-vulnerable .sol / .json files
 │   └── synthetic_contracts/              # Auto-generated synthetic contracts
 │
+├── frontend/                              # React + TypeScript + Vite web client
+│   ├── src/
+│   │   ├── pages/                         # Landing/Audit/Benchmark/New Vulnerability pages
+│   │   ├── features/                      # Feature modules (audit/benchmark/vulnerabilities)
+│   │   └── components/                    # Shared layout/navigation components
+│   └── README.md                          # Frontend setup and architecture notes
+│
+├── backend/                               # FastAPI service layer and API routes
+│   ├── app/
+│   │   ├── api/routes/                    # audits/benchmark/vulnerabilities endpoints
+│   │   ├── schemas/                       # Pydantic request/response models
+│   │   └── services/                      # Domain services and persistence integration
+│   └── README.md                          # Backend setup and API notes
+│
+├── supabase/
+│   ├── schema.sql                         # Shared database schema
+│   └── migrations/                        # Incremental SQL migrations
+│
 ├── results/                               # Experiment run outputs (auto-created)
 └── tests/                                 # Pytest unit tests for all four phases
 ```
@@ -151,6 +170,32 @@ source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
 # 3. Install all dependencies
 pip install -r requirements.txt
+```
+
+### 4.1 Run Frontend + Backend (Full-Stack)
+
+Use two terminals from the repository root.
+
+Terminal A (Backend):
+
+```bash
+python -m uvicorn app.main:app --app-dir backend --reload --port 8000
+```
+
+Terminal B (Frontend):
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open the frontend URL shown by Vite (usually `http://localhost:5173`).
+
+If your frontend targets a different backend URL, set:
+
+```bash
+export VITE_API_URL=http://localhost:8000
 ```
 
 ---
