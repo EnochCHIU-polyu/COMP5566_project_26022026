@@ -18,6 +18,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Route path="/benchmark" element={<BenchmarkPage />} />
         <Route path="/new-vulnerability" element={<NewVulnerabilityPage />} />
         <Route path="/more (wip)" element={<EndPage />} />
+        <Route path="/end" element={<Navigate to="/more (wip)" replace />} />
         <Route path="/function" element={<Navigate to="/audit" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
