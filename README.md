@@ -9,6 +9,7 @@ It uses GPT-4 / Claude / DeepSeek to systematically check a contract against **3
 
 1. [System Overview](#1-system-overview)
 2. [Project Structure](#2-project-structure)
+   - [Frontend/Backend App Summary](#21-frontendbackend-app-summary)
 3. [Requirements](#3-requirements)
 4. [Installation](#4-installation)
 5. [Configuration](#5-configuration)
@@ -86,6 +87,30 @@ COMP5566_project_26022026/
 ├── results/                               # Experiment run outputs (auto-created)
 └── tests/                                 # Pytest unit tests for all four phases
 ```
+
+---
+
+## 2.1 Frontend/Backend App Summary
+
+This repository now includes a production-style full-stack web app in addition
+to the Streamlit UI.
+
+- Frontend: React + TypeScript + Vite + Tailwind
+  - Source: `frontend/src/`
+  - Main routes: `/`, `/audit`, `/benchmark`, `/new-vulnerability`
+  - API base URL: `VITE_API_URL` (fallback `http://localhost:8000`)
+- Backend: FastAPI
+  - Source: `backend/app/`
+  - Health endpoint: `GET /healthz`
+  - Feature APIs:
+    - Audits: `POST /api/v1/audits`, `GET /api/v1/audits/{id}`, `GET /api/v1/audits/{id}/stream`
+    - Benchmark: `GET /api/v1/benchmark/contracts`, `GET /api/v1/benchmark/llm-check`, `POST /api/v1/benchmark/run`
+    - Vulnerability submit: `POST /api/v1/vulnerabilities/submissions`
+
+Detailed docs:
+
+- Frontend detail: [frontend/README.md](frontend/README.md)
+- Backend detail: [backend/README.md](backend/README.md)
 
 ---
 

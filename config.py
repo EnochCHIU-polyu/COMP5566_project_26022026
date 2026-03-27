@@ -17,7 +17,7 @@ GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 ETHERSCAN_API_KEY: str = os.getenv("ETHERSCAN_API_KEY", "")
 
 # ── LLM Settings ─────────────────────────────────────────────────────────────
-DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "gpt-4o")
+DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "deepseek-v3.2")
 GITHUB_FALLBACK_MODEL: str = os.getenv(
 	"GITHUB_FALLBACK_MODEL",
 	"deepseek/DeepSeek-V3-0324",

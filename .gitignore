@@ -6,6 +6,11 @@ __pycache__/
 dist/
 build/
 .venv/
+node_modules/
+
+# Frontend package/cache artifacts
+frontend/node_modules/
+frontend/.vite/
 
 # Runtime-generated data (not committed)
 data/synthetic_contracts/
