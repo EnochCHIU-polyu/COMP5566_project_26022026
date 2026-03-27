@@ -208,6 +208,7 @@ All settings can also be changed directly in `config.py`.
 - Reviewer can mark submissions `under_review` / `rejected`, or **Approve + Publish** to append into shared vulnerable contracts.
 - Vulnerability catalog is loaded from Supabase table `vulnerability_types` (with local fallback).
 - Audit now always runs full-catalog detection for every contract (no manual vulnerability selection UI).
+- In the main audit view, run **Slither Pre-Scan** first to generate static-detector findings; those findings are injected into LLM prompts as reference context.
 
 ---
 

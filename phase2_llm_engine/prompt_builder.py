@@ -142,6 +142,7 @@ def build_prompt(
     structured: bool = False,
     example_vulnerable: str = "",
     example_fixed: str = "",
+    slither_reference: str = "",
 ) -> list[dict]:
     """
     Build a list of LLM messages for a single vulnerability check.
@@ -188,6 +189,11 @@ def build_prompt(
     hint = VULN_CRITICAL_HINTS.get(vuln_name, "")
     if hint:
         context += f"\n\nCRITICAL: {hint}"
+    if slither_reference.strip():
+        context += (
+            "\n\nStatic analysis reference (Slither, may include false positives):\n"
+            f"{slither_reference.strip()}"
+        )
     task = _TASK_QUERY_TEMPLATE.format(vuln_name=vuln_name)
     if mode == "binary":
         task += _BINARY_SUFFIX
@@ -342,6 +348,7 @@ def build_agent_reflection_prompt(
     vuln_name: str,
     vuln_description: str,
     initial_analysis: str,
+    slither_reference: str = "",
 ) -> list[dict]:
     """
     Build prompt for agent reflection step: judge whether initial analysis is correct.
@@ -371,9 +378,16 @@ def build_agent_reflection_prompt(
     )
     hint = VULN_CRITICAL_HINTS.get(vuln_name, "")
     hint_block = f"\nCritical pattern to check: {hint}" if hint else ""
+    slither_block = (
+        "\n\nStatic analysis reference (Slither, may include false positives):\n"
+        f"{slither_reference.strip()}"
+        if slither_reference.strip()
+        else ""
+    )
     user_content = (
         f"Vulnerability type: {vuln_name}\n"
         f"Definition: {vuln_description}{hint_block}\n\n"
+        f"{slither_block}\n"
         f"Another auditor's analysis:\n{initial_analysis}\n\n"
         f"Source code (excerpt):\n{source_code[:4000]}\n\n"
         "Is this analysis correct? Does the contract actually have this vulnerability? "
@@ -388,6 +402,7 @@ def build_agent_reflection_prompt(
 def build_multi_vuln_prompt(
     source_code: str,
     vulns: list[dict],
+    slither_reference: str = "",
 ) -> list[dict]:
     """
     Build a single prompt that checks multiple vulnerability types at once.
@@ -409,9 +424,16 @@ def build_multi_vuln_prompt(
     vuln_list = "\n".join(
         f"- {v['name']}: {v['description']}" for v in vulns
     )
+    slither_block = (
+        "Slither reference (may include false positives):\n"
+        f"{slither_reference.strip()}\n\n"
+        if slither_reference.strip()
+        else ""
+    )
     user_content = (
         f"Audit the following contract for ALL of these vulnerability types:\n\n"
         f"{vuln_list}\n\n"
+        f"{slither_block}"
         f"Source Code:\n{source_code}\n\n"
         f"For each vulnerability type found, include it in the JSON findings array."
     )
@@ -425,6 +447,7 @@ def build_batch_audit_prompt(
     source_code: str,
     vulns: list[dict],
     mode: str = "non_binary",
+    slither_reference: str = "",
 ) -> list[dict]:
     """
     Build batch prompt with strict JSON schema. Includes per-vuln examples and hints.
@@ -465,11 +488,18 @@ def build_batch_audit_prompt(
             }
         ]
     }
+    slither_block = (
+        "Static analysis reference (Slither, may include false positives):\n"
+        f"{slither_reference.strip()}\n\n"
+        if slither_reference.strip()
+        else ""
+    )
     user_prompt = (
         "Audit the smart contract for each selected vulnerability and return ONLY valid JSON.\n\n"
         f"Mode: {mode}\nInstruction: {mode_instruction}\n\n"
         "Selected vulnerabilities (with patterns and critical hints):\n"
         f"{vuln_block}\n\n"
+        f"{slither_block}"
         "Requirements:\n"
         "1) Return one result object for EVERY listed vulnerability (no omissions).\n"
         "2) Keep vuln_name exactly identical to the provided name.\n"

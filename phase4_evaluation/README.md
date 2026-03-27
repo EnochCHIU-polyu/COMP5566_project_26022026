@@ -301,6 +301,7 @@ streamlit run phase4_evaluation/ui_app.py
 | **Model selector**         | `deepseek-v3.2`, `gpt-4o`, `gpt-4o-mini`, or custom model string                                           |
 | **Temperature slider**     | 0.0 – 1.0                                                                                                  |
 | **Classification mode**    | Binary (YES/NO) or Non-Binary (detailed)                                                                   |
+| **Slither pre-scan**       | Runs Slither detector suite first and shows findings in UI; summary is sent into LLM prompts as reference  |
 | **Progress bar**           | Shows progress through selected vulnerability types                                                        |
 | **Result panels**          | 🔴 / 🟢 per vulnerability, collapsible                                                                     |
 | **Line highlighting**      | Flagged source lines shown in red inside a code viewer                                                     |
@@ -320,14 +321,18 @@ streamlit run phase4_evaluation/ui_app.py
 3. Configure the model, temperature, and mode in the sidebar
 
 4. Click 🚀 Run Audit
+    → system runs Slither pre-scan automatically first
 
-5. Review collapsible result panels:
+5. Review the 🧪 Slither Pre-Scan section
+    → detector findings are displayed and injected into LLM prompts as reference
+
+6. Review LLM collapsible result panels:
    🔴 = LLM flagged a vulnerability
    🟢 = LLM found no issue
 
-6. Click into flagged results to see the highlighted source lines
+7. Click into flagged results to see the highlighted source lines
 
-7. Use TP / FP / FN buttons to record your verdict
+8. Use TP / FP / FN buttons to record your verdict
    → The sidebar updates F1 / Precision / Recall in real time
 ```
 

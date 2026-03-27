@@ -49,6 +49,11 @@ from phase1_data_pipeline.supabase_store import (
 from phase1_data_pipeline.token_counter import count_tokens
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase2_llm_engine.vulnerability_store import get_vulnerability_names, get_vulnerability_types
+from phase2_llm_engine.slither_runner import (
+    format_slither_reference,
+    is_slither_available,
+    run_slither_analysis,
+)
 from phase2_llm_engine.llm_client import query_llm
 from phase2_llm_engine.cot_analyzer import analyze_contract, analyze_contract_cascade, run_multi_llm_audit
 from phase4_evaluation.scorer import compute_metrics, evaluate_batch
@@ -170,7 +175,12 @@ def _extract_json_payload(raw_text: str) -> dict | None:
     return None
 
 
-def _build_batch_messages(source_code: str, selected_batch: list[dict], mode: str) -> list[dict]:
+def _build_batch_messages(
+    source_code: str,
+    selected_batch: list[dict],
+    mode: str,
+    slither_reference: str = "",
+) -> list[dict]:
     """Build one prompt that audits a batch of vulnerabilities and returns strict JSON."""
     mode_instruction = {
         "binary": "Use YES/NO verdict for each vulnerability, with a concise but specific explanation.",
@@ -195,6 +205,12 @@ def _build_batch_messages(source_code: str, selected_batch: list[dict], mode: st
             }
         ]
     }
+    slither_block = (
+        "Static analysis reference (Slither, may include false positives):\n"
+        f"{slither_reference.strip()}\n\n"
+        if slither_reference.strip()
+        else ""
+    )
 
     user_prompt = (
         "Audit the smart contract for each selected vulnerability and return ONLY valid JSON.\n\n"
@@ -202,6 +218,7 @@ def _build_batch_messages(source_code: str, selected_batch: list[dict], mode: st
         f"Instruction: {mode_instruction}\n\n"
         "Selected vulnerabilities:\n"
         f"{vuln_block}\n\n"
+        f"{slither_block}"
         "Requirements:\n"
         "1) Return one result object for EVERY listed vulnerability (no omissions).\n"
         "2) Keep vuln_name exactly identical to the provided name.\n"
@@ -253,6 +270,7 @@ def _run_batched_checks(
     batch_size: int,
     progress_bar,
     status_text,
+    slither_reference: str = "",
 ) -> list[dict]:
     """Run vulnerability checks in batches and split JSON output back per vulnerability."""
     vuln_catalog = get_vulnerability_types()
@@ -277,7 +295,12 @@ def _run_batched_checks(
         )
 
         chunk_vulns = [vuln_by_name[name] for name in chunk_names]
-        messages = _build_batch_messages(source_code, chunk_vulns, mode)
+        messages = _build_batch_messages(
+            source_code,
+            chunk_vulns,
+            mode,
+            slither_reference=slither_reference,
+        )
 
         try:
             raw_response = query_llm(messages, model=model_choice, temperature=temperature)
@@ -941,16 +964,122 @@ else:
 if not source_code:
     st.warning("Add Solidity code first to enable audit.")
 
+if "last_slither" not in st.session_state:
+    st.session_state.last_slither = None
+if "show_slither_section" not in st.session_state:
+    st.session_state.show_slither_section = False
+if "last_slither_reference" not in st.session_state:
+    st.session_state.last_slither_reference = ""
+if "last_audit_source" not in st.session_state:
+    st.session_state.last_audit_source = ""
+
+slither_ready = is_slither_available()
+
+
+def _render_slither_section(slither_result: dict | None, include_actions: bool = True) -> None:
+    """Render Slither section in a stable location even during long audit runs."""
+    st.subheader("🧪 Slither Pre-Scan")
+    st.caption(
+        "Triggered automatically when you click Run Audit. Slither findings are shown here and "
+        "also passed into the LLM prompt as reference context."
+    )
+
+    if include_actions and st.button("Clear Slither Result", key="clear_slither_scan"):
+        st.session_state.last_slither = None
+        slither_result = None
+
+    if not slither_ready:
+        st.warning(
+            "Slither CLI not found. Install with `pip install slither-analyzer` to enable pre-scan."
+        )
+
+    if slither_result:
+        if slither_result.get("ok"):
+            findings = slither_result.get("findings", []) or []
+            st.success(f"Slither scan complete: {len(findings)} detector alert(s).")
+            st.text(slither_result.get("summary", ""))
+            if findings:
+                table_rows = []
+                for item in findings[:50]:
+                    lines = item.get("lines", []) or []
+                    line_text = ", ".join(f"L{ln}" for ln in lines[:8]) if lines else "-"
+                    table_rows.append(
+                        {
+                            "detector": item.get("check"),
+                            "impact": item.get("impact"),
+                            "confidence": item.get("confidence"),
+                            "lines": line_text,
+                            "description": item.get("description", "")[:180],
+                        }
+                    )
+                st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
+        else:
+            st.error(slither_result.get("error", "Slither scan failed."))
+    elif source_code:
+        st.info("Click Run Audit to start Slither pre-scan and then LLM analysis.")
+
 _audit_disabled = (
     not source_code
     or (audit_pipeline == "multi_llm" and not multi_models)
 )
-if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
+run_audit_clicked = st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled)
+
+slither_placeholder = st.empty()
+if st.session_state.show_slither_section and not run_audit_clicked:
+    with slither_placeholder.container():
+        _render_slither_section(st.session_state.get("last_slither"), include_actions=True)
+
+if run_audit_clicked:
+    st.session_state.show_slither_section = True
+
+    # Show Slither block immediately while processing starts.
+    with slither_placeholder.container():
+        _render_slither_section(
+            {
+                "ok": True,
+                "findings": [],
+                "summary": "Slither pre-scan is running...",
+            },
+            include_actions=False,
+        )
+
     if audit_pipeline == "multi_llm" and not multi_models:
         st.error("Multi-LLM requires at least one model in the sidebar.")
     else:
         logger.info(
-            "Audit started: pipeline=%s model=%s mode=%s selected_vulnerabilities=%d",
+            "Step 1 started: slither pre-scan | pipeline=%s model=%s mode=%s selected_vulnerabilities=%d",
+            audit_pipeline,
+            model_choice,
+            mode,
+            len(effective_selected_vulns),
+        )
+        with st.spinner("Step 1/2: Running Slither pre-scan..."):
+            if slither_ready:
+                st.session_state.last_slither = run_slither_analysis(
+                    source_code=source_code,
+                    file_name="StreamlitInput.sol",
+                )
+                st.session_state.last_slither_reference = format_slither_reference(
+                    st.session_state.last_slither
+                )
+            else:
+                st.session_state.last_slither = {
+                    "ok": False,
+                    "error": "Slither CLI not found. Install with pip install slither-analyzer.",
+                    "findings": [],
+                    "summary": "",
+                    "raw": None,
+                }
+                st.session_state.last_slither_reference = ""
+
+        with slither_placeholder.container():
+            _render_slither_section(st.session_state.get("last_slither"), include_actions=True)
+
+        st.session_state.last_audit_source = source_code
+        st.info("Step 1 complete: Slither result ready. Starting LLM audit automatically...")
+
+        logger.info(
+            "Step 2 started automatically: llm audit | pipeline=%s model=%s mode=%s selected_vulnerabilities=%d",
             audit_pipeline,
             model_choice,
             mode,
@@ -964,10 +1093,13 @@ if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
                 progress_bar.progress(min(1.0, float(cur) / float(total)))
             status_text.text(msg)
 
+        source_for_audit = st.session_state.get("last_audit_source") or source_code
+        slither_reference_text = st.session_state.get("last_slither_reference", "")
+
         try:
             if audit_pipeline == "standard":
                 results = _run_batched_checks(
-                    source_code=source_code,
+                    source_code=source_for_audit,
                     selected_vuln_names=effective_selected_vulns,
                     mode=mode,
                     model_choice=model_choice,
@@ -975,13 +1107,14 @@ if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
                     batch_size=batch_size,
                     progress_bar=progress_bar,
                     status_text=status_text,
+                    slither_reference=slither_reference_text,
                 )
                 st.session_state.cascade_extra = None
                 st.session_state.last_pipeline = "standard"
             elif audit_pipeline == "cascade":
                 status_text.text("Cascade audit running…")
                 cascade_result = analyze_contract_cascade(
-                    source_code=source_code,
+                    source_code=source_for_audit,
                     contract_name="Streamlit",
                     small_model=cascade_small,
                     large_model=cascade_large,
@@ -990,6 +1123,7 @@ if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
                     verify_with_rag=verify_rag_cascade and verify_cascade,
                     vuln_filter=effective_selected_vulns,
                     progress_callback=_progress_cb,
+                    slither_reference=slither_reference_text,
                 )
                 results = [
                     {"vuln_name": r["vuln_name"], "response": r["response"]}
@@ -1007,7 +1141,7 @@ if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
                     + (" (parallel)" if multi_parallel else "")
                 )
                 multi_result = run_multi_llm_audit(
-                    source_code=source_code,
+                    source_code=source_for_audit,
                     contract_name="Streamlit",
                     models=multi_models,
                     mode=mode,
@@ -1016,6 +1150,7 @@ if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
                     vuln_filter=effective_selected_vulns,
                     parallel_models=multi_parallel,
                     progress_callback=None if multi_parallel else _progress_cb,
+                    slither_reference=slither_reference_text,
                 )
                 results = [
                     {"vuln_name": r["vuln_name"], "response": r["response"]}
@@ -1034,12 +1169,11 @@ if st.button("🚀 Run Audit", type="primary", disabled=_audit_disabled):
             st.stop()
 
         progress_bar.progress(1.0)
-        status_text.text("✅ Audit complete!")
+        status_text.text("✅ Final audit complete!")
         logger.info("Audit completed: processed_vulnerabilities=%d", len(results))
         st.session_state.last_results = results
-        st.session_state.last_source = source_code
+        st.session_state.last_source = source_for_audit
 
-# ---------------------------------------------------------------------------
 # Results display with line highlighting
 # ---------------------------------------------------------------------------
 

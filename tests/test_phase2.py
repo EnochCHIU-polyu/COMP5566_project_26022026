@@ -9,7 +9,9 @@ from phase2_llm_engine.prompt_builder import (
     build_prompt,
     build_cot_function_prompt,
     extract_function_names,
+    build_batch_audit_prompt,
 )
+from phase2_llm_engine.slither_runner import format_slither_reference
 
 
 class TestVulnerabilityTypes:
@@ -88,6 +90,27 @@ class TestPromptBuilder:
         system_content = messages[0]["content"]
         assert "smart contract auditor" in system_content.lower()
 
+    def test_build_prompt_includes_slither_reference(self):
+        messages = build_prompt(
+            source_code="contract A {}",
+            vuln_name="Reentrancy",
+            vuln_description="desc",
+            slither_reference="- detector=reentrancy lines=L12",
+        )
+        assert "Slither" in messages[1]["content"]
+        assert "detector=reentrancy" in messages[1]["content"]
+
+    def test_build_batch_prompt_includes_slither_reference(self):
+        vulns = [{"name": "Reentrancy", "description": "desc"}]
+        messages = build_batch_audit_prompt(
+            source_code="contract A {}",
+            vulns=vulns,
+            mode="binary",
+            slither_reference="- detector=reentrancy lines=L3",
+        )
+        assert "Static analysis reference" in messages[1]["content"]
+        assert "detector=reentrancy" in messages[1]["content"]
+
 
 class _FakeResponse:
     def __init__(self, data):
@@ -144,3 +167,26 @@ class TestVulnerabilityStore:
         loaded = vulnerability_store.get_vulnerability_types()
         assert len(loaded) == 1
         assert loaded[0]["name"] == "Reentrancy"
+
+
+class TestSlitherRunner:
+    def test_format_slither_reference_empty(self):
+        assert format_slither_reference(None) == ""
+
+    def test_format_slither_reference_with_findings(self):
+        slither_result = {
+            "ok": True,
+            "findings": [
+                {
+                    "check": "timestamp",
+                    "impact": "Medium",
+                    "confidence": "High",
+                    "description": "timestamp dependence detected",
+                    "lines": [8, 10],
+                }
+            ],
+        }
+        text = format_slither_reference(slither_result)
+        assert "Slither pre-scan findings" in text
+        assert "timestamp" in text
+        assert "L8" in text

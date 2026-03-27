@@ -77,12 +77,18 @@ def _run_batch_audit_for_model(
     temperature: Optional[float],
     vuln_filter: Sequence[str],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    slither_reference: str = "",
 ) -> dict:
     """Run batch prompt for one model (same format as Standard mode, better detection)."""
     vulnerability_types = get_vulnerability_types()
     vuln_set = set(vuln_filter)
     selected = [v for v in vulnerability_types if v["name"] in vuln_set]
-    messages = build_batch_audit_prompt(source_code, selected, mode)
+    messages = build_batch_audit_prompt(
+        source_code,
+        selected,
+        mode,
+        slither_reference=slither_reference,
+    )
     raw = query_llm(messages, model=model, temperature=temperature)
     vuln_results = _parse_batch_json_response(raw, list(vuln_filter))
     return {
@@ -123,6 +129,7 @@ def analyze_contract(
     agent_mode: bool = False,
     agent_judge_model: Optional[str] = None,
     vuln_filter: Optional[Sequence[str]] = None,
+    slither_reference: str = "",
 ) -> dict:
     """
     Run a full audit of *source_code* using all 38 vulnerability types and
@@ -179,7 +186,11 @@ def analyze_contract(
     vulnerability_types = get_vulnerability_types()
 
     if effective_mode == "multi_vuln":
-        messages = build_multi_vuln_prompt(source_code, vulnerability_types)
+        messages = build_multi_vuln_prompt(
+            source_code,
+            vulnerability_types,
+            slither_reference=slither_reference,
+        )
         response = query_llm(messages, model=model, temperature=temperature)
         if progress_callback:
             progress_callback(1, 1, "multi_vuln batch complete")
@@ -210,6 +221,7 @@ def analyze_contract(
             mode=effective_mode,
             example_vulnerable=vuln.get("example_vulnerable", ""),
             example_fixed=vuln.get("example_fixed", ""),
+            slither_reference=slither_reference,
         )
         response = query_llm(messages, model=model, temperature=temperature)
 
@@ -222,6 +234,7 @@ def analyze_contract(
                 vuln_name=vuln["name"],
                 vuln_description=vuln["description"],
                 initial_analysis=response,
+                slither_reference=slither_reference,
             )
             reflection = query_llm(
                 reflect_messages,
@@ -326,6 +339,7 @@ def analyze_contract_cascade(
     verify_with_rag: bool = False,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     vuln_filter: Optional[Sequence[str]] = None,
+    slither_reference: str = "",
 ) -> dict:
     """
     Two-tier audit: cheap binary model first; expensive model only when the first pass
@@ -357,6 +371,7 @@ def analyze_contract_cascade(
             mode="binary",
             example_vulnerable=vuln.get("example_vulnerable", ""),
             example_fixed=vuln.get("example_fixed", ""),
+            slither_reference=slither_reference,
         )
         small_resp = query_llm(messages_bin, model=small_model, temperature=temperature)
         step += 1
@@ -377,6 +392,7 @@ def analyze_contract_cascade(
             mode="non_binary",
             example_vulnerable=vuln.get("example_vulnerable", ""),
             example_fixed=vuln.get("example_fixed", ""),
+            slither_reference=slither_reference,
         )
         large_resp = query_llm(messages_deep, model=large_model, temperature=temperature)
         step += 1
@@ -457,6 +473,7 @@ def run_multi_llm_audit(
     agent_mode: bool = False,
     agent_judge_model: Optional[str] = None,
     parallel_models: bool = False,
+    slither_reference: str = "",
 ) -> dict:
     """
     Run audit with multiple LLMs and aggregate results.
@@ -513,6 +530,7 @@ def run_multi_llm_audit(
                 temperature=temperature,
                 vuln_filter=vuln_filter,
                 progress_callback=None,
+                slither_reference=slither_reference,
             )
         return analyze_contract(
             source_code=source_code,
@@ -524,6 +542,7 @@ def run_multi_llm_audit(
             vuln_filter=vuln_filter,
             agent_mode=agent_mode,
             agent_judge_model=agent_judge_model,
+            slither_reference=slither_reference,
         )
 
     all_results: list[dict] = []
