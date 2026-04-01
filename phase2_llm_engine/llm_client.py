@@ -23,6 +23,8 @@ from config import (
     GITHUB_FALLBACK_MODEL,
     TEMPERATURE,
     API_PAUSE_SECONDS,
+    LLM_TRACE_MESSAGES,
+    LLM_TRACE_MAX_CHARS,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +85,35 @@ def _get_github_client():
 _last_call_time: float = 0.0
 
 
+def _clip_text(text: str) -> str:
+    if len(text) <= LLM_TRACE_MAX_CHARS:
+        return text
+    return f"{text[:LLM_TRACE_MAX_CHARS]}\n... [truncated {len(text) - LLM_TRACE_MAX_CHARS} chars]"
+
+
+def _trace_messages(messages: list[dict], model: str) -> None:
+    if not LLM_TRACE_MESSAGES:
+        return
+
+    header = f"[LLM TRACE] request model={model} message_count={len(messages)}"
+    logger.info(header)
+    print(header, flush=True)
+    for idx, msg in enumerate(messages, start=1):
+        role = str(msg.get("role", "unknown"))
+        content = str(msg.get("content", ""))
+        trace_text = f"[LLM TRACE] message[{idx}] role={role}\n{_clip_text(content)}"
+        logger.info(trace_text)
+        print(trace_text, flush=True)
+
+
+def _trace_response(model: str, text: str) -> None:
+    if not LLM_TRACE_MESSAGES:
+        return
+    trace_text = f"[LLM TRACE] response model={model}\n{_clip_text(text)}"
+    logger.info(trace_text)
+    print(trace_text, flush=True)
+
+
 def _enforce_pause() -> None:
     """Sleep until at least API_PAUSE_SECONDS have elapsed since the last call."""
     global _last_call_time
@@ -139,6 +170,7 @@ def query_llm(
         max_tokens,
         len(messages),
     )
+    _trace_messages(messages, model)
 
     last_exc: Optional[Exception] = None
     for attempt in range(_MAX_RETRIES + 1):
@@ -236,7 +268,9 @@ def _query_openai(
         max_tokens=max_tokens,
     )
     logger.info("Received response from OpenAI (model=%s)", model)
-    return response.choices[0].message.content or ""
+    text = response.choices[0].message.content or ""
+    _trace_response(model, text)
+    return text
 
 
 def _query_github(
@@ -254,7 +288,9 @@ def _query_github(
         max_tokens=max_tokens,
     )
     logger.info("Received response from GitHub Models (model=%s)", model)
-    return response.choices[0].message.content or ""
+    text = response.choices[0].message.content or ""
+    _trace_response(model, text)
+    return text
 
 
 def _query_anthropic(
@@ -282,4 +318,6 @@ def _query_anthropic(
         max_tokens=max_tokens,
     )
     logger.info("Received response from Anthropic (model=%s)", model)
-    return response.content[0].text if response.content else ""
+    text = response.content[0].text if response.content else ""
+    _trace_response(model, text)
+    return text

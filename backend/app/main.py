@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.audits import router as audits_router
 from app.api.routes.benchmark import router as benchmark_router
 from app.api.routes.vulnerabilities import router as vulnerabilities_router
+
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
 app = FastAPI(title="Smart Contract Audit API", version="0.1.0")
 

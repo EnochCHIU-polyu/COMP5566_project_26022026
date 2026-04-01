@@ -1,6 +1,15 @@
 import type { AuditCreateInput, AuditEvent } from "../types";
 import { API_BASE } from "../../../lib/apiConfig";
 
+export interface VulnerabilityCatalogResponse {
+  count: number;
+  names: string[];
+  source?: string;
+  raw_row_count?: number | null;
+  table?: string;
+  data_backend?: string;
+}
+
 export async function createAudit(
   input: AuditCreateInput,
 ): Promise<{ audit_id: string; status: string }> {
@@ -13,6 +22,14 @@ export async function createAudit(
     throw new Error(`Create audit failed: ${res.status}`);
   }
   return res.json();
+}
+
+export async function getVulnerabilityCatalog(): Promise<VulnerabilityCatalogResponse> {
+  const res = await fetch(`${API_BASE}/api/v1/vulnerabilities/catalog`);
+  if (!res.ok) {
+    throw new Error(`Load vulnerability catalog failed: ${res.status}`);
+  }
+  return res.json() as Promise<VulnerabilityCatalogResponse>;
 }
 
 export function streamAudit(

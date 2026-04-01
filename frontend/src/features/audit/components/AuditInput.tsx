@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AuditCreateInput } from "../types";
+import { getVulnerabilityCatalog } from "../services/auditApi";
 
 interface Props {
   onSubmit: (input: AuditCreateInput) => void;
@@ -13,9 +14,29 @@ export function AuditInput({ onSubmit, disabled = false }: Props) {
   const [pipeline, setPipeline] = useState("standard");
   const [temperature, setTemperature] = useState(0);
   const [batchSize, setBatchSize] = useState(8);
+  const [maxBatchSize, setMaxBatchSize] = useState(38);
   const [sourceCode, setSourceCode] = useState(
     "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n",
   );
+
+  useEffect(() => {
+    let mounted = true;
+
+    getVulnerabilityCatalog()
+      .then((catalog) => {
+        if (!mounted) return;
+        const nextMax = Math.max(1, Number(catalog.count) || 1);
+        setMaxBatchSize(nextMax);
+        setBatchSize((prev) => Math.min(prev, nextMax));
+      })
+      .catch(() => {
+        // Keep default fallback when backend catalog endpoint is unavailable.
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const submit = () => {
     onSubmit({
@@ -97,7 +118,7 @@ export function AuditInput({ onSubmit, disabled = false }: Props) {
           <input
             type="range"
             min={1}
-            max={38}
+            max={maxBatchSize}
             step={1}
             value={batchSize}
             onChange={(e) => setBatchSize(Number(e.target.value))}

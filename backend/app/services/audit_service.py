@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import sys
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +24,14 @@ from phase2_llm_engine.slither_runner import (
     is_slither_available,
     run_slither_analysis,
 )
-from phase2_llm_engine.vulnerability_store import get_vulnerability_names, get_vulnerability_types
+from phase2_llm_engine.vulnerability_store import get_vulnerability_types
+from phase2_llm_engine.vulnerability_store import get_vulnerability_catalog_meta
 
 from app.schemas.audit import AuditCreateRequest
 from app.services.sse_manager import sse_manager
+
+
+logger = logging.getLogger(__name__)
 
 
 LLM_BATCH_TIMEOUT_SECONDS = 120
@@ -178,10 +183,10 @@ async def _run_standard_batched_checks_streaming(
     temperature: float,
     batch_size: int,
     slither_reference: str,
+    vuln_catalog: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
-    vuln_catalog = get_vulnerability_types()
     vuln_by_name = {v["name"]: v for v in vuln_catalog}
-    selected_names = get_vulnerability_names()
+    selected_names = [v["name"] for v in vuln_catalog]
     chunks = _chunk_list(selected_names, max(1, batch_size))
 
     results: list[dict[str, str]] = []
@@ -276,6 +281,23 @@ class AuditService:
                 payload={"message": "Running Slither detectors"},
             )
 
+            catalog_meta = await asyncio.to_thread(get_vulnerability_catalog_meta)
+            catalog_count = int(catalog_meta.get("count", 0) or 0)
+            catalog_source = str(catalog_meta.get("source", "unknown"))
+            logger.info(
+                "Audit %s catalog loaded: source=%s count=%d",
+                audit_id,
+                catalog_source,
+                catalog_count,
+            )
+
+            vuln_catalog = await asyncio.to_thread(get_vulnerability_types)
+            logger.info(
+                "Audit %s using vulnerability snapshot count=%d",
+                audit_id,
+                len(vuln_catalog),
+            )
+
             preprocessed = await asyncio.to_thread(
                 preprocess_contract,
                 req.source_code,
@@ -356,7 +378,7 @@ class AuditService:
                         req.temperature,
                         "majority",
                         None,
-                        get_vulnerability_names(),
+                        [v["name"] for v in vuln_catalog],
                         False,
                         None,
                         False,
@@ -384,6 +406,7 @@ class AuditService:
                     req.temperature,
                     req.batch_size,
                     slither_reference,
+                    vuln_catalog,
                 )
 
             if req.pipeline == "cascade":

@@ -8,6 +8,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+	val = os.getenv(name)
+	if val is None:
+		return default
+	return val.strip().lower() in {"1", "true", "yes", "on"}
+
 # ── API Keys ────────────────────────────────────────────────────────────────
 POE_API_KEY: str = os.getenv("POE_API_KEY", "")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "") or POE_API_KEY
@@ -30,6 +37,8 @@ MAX_CONTEXT_TOKENS: int = int(os.getenv("MAX_CONTEXT_TOKENS", "32000"))
 # ── Rate-Limit Settings ───────────────────────────────────────────────────────
 # Minimum pause (seconds) between successive API calls to avoid rate-limit errors
 API_PAUSE_SECONDS: float = float(os.getenv("API_PAUSE_SECONDS", "13"))
+LLM_TRACE_MESSAGES: bool = _env_bool("LLM_TRACE_MESSAGES", False)
+LLM_TRACE_MAX_CHARS: int = int(os.getenv("LLM_TRACE_MAX_CHARS", "4000"))
 
 # ── Classification Modes ──────────────────────────────────────────────────────
 # "binary"     → force YES/NO answer (rapid scan)
