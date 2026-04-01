@@ -34,6 +34,11 @@ class AuditCreateResponse(BaseModel):
     status: str
 
 
+class AuditFeedbackRequest(BaseModel):
+    vuln_name: str = Field(min_length=1, max_length=200)
+    is_true: bool
+
+
 class AuditEvent(BaseModel):
     audit_id: str
     event: AuditEventType

@@ -11,6 +11,11 @@ function fmt(value: number): string {
   return Number.isFinite(value) ? value.toFixed(2) : "0.00";
 }
 
+function fmtRate(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "NA";
+  return `${(value * 100).toFixed(2)}%`;
+}
+
 export function EndPage() {
   const [data, setData] = useState<RuntimeMetricsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,7 +65,7 @@ export function EndPage() {
         </section>
       )}
 
-      <section className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <section className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-7">
         <article className="aw-card">
           <p className="aw-subtle text-xs">Total Runs</p>
           <p className="aw-title mt-2 text-3xl font-bold">
@@ -100,6 +105,17 @@ export function EndPage() {
             +1 for each OTHER vulnerability found
           </p>
         </article>
+        <article className="aw-card">
+          <p className="aw-subtle text-xs">True Rate (Answered)</p>
+          <p className="aw-title mt-2 text-3xl font-bold text-sky-700">
+            {loading ? "..." : fmtRate(data?.summary.feedback_true_rate)}
+          </p>
+          <p className="aw-subtle mt-1 text-xs">
+            {loading
+              ? "..."
+              : `True ${data?.summary.feedback_true_count ?? 0} / ${data?.summary.feedback_response_count ?? 0} answered`}
+          </p>
+        </article>
       </section>
 
       <section className="aw-card mt-4">
@@ -119,19 +135,21 @@ export function EndPage() {
                 <th className="px-2 py-2">Mapped</th>
                 <th className="px-2 py-2">Other</th>
                 <th className="px-2 py-2">Results</th>
+                <th className="px-2 py-2">True/(True+False)</th>
+                <th className="px-2 py-2">True Rate</th>
               </tr>
             </thead>
             <tbody>
               {latest.length === 0 && !loading && (
                 <tr>
-                  <td className="px-2 py-3 text-slate-500" colSpan={9}>
+                  <td className="px-2 py-3 text-slate-500" colSpan={11}>
                     No runtime evaluation records yet.
                   </td>
                 </tr>
               )}
               {loading && (
                 <tr>
-                  <td className="px-2 py-3 text-slate-500" colSpan={9}>
+                  <td className="px-2 py-3 text-slate-500" colSpan={11}>
                     Loading evaluation records...
                   </td>
                 </tr>
@@ -167,6 +185,13 @@ export function EndPage() {
                   <td className="px-2 py-2">{Number(row.other_count ?? 0)}</td>
                   <td className="px-2 py-2">
                     {Number(row.llm_result_count ?? 0)}
+                  </td>
+                  <td className="px-2 py-2">
+                    {Number(row.feedback_true_count ?? 0)} /{" "}
+                    {Number(row.feedback_response_count ?? 0)}
+                  </td>
+                  <td className="px-2 py-2">
+                    {fmtRate(row.feedback_true_rate ?? null)}
                   </td>
                 </tr>
               ))}

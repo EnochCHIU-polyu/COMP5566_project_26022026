@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 
+import { clearAuditFeedback, submitAuditFeedback } from "../services/auditApi";
 import type { AuditMappingInfo, AuditVulnResult } from "../types";
 
 type IssueFilter = "all" | "issue" | "no-issue";
-type EvalLabel = "TP" | "TF" | "FP" | "FF";
+type EvalLabel = "True" | "False";
 
 interface EvidenceMark {
   auditId: string;
@@ -97,7 +98,7 @@ export function FinalResultPanel({
   pipeline,
 }: Props) {
   const [issueFilter, setIssueFilter] = useState<IssueFilter>("issue");
-  const [markMenuKey, setMarkMenuKey] = useState<string | null>(null);
+  const [submittingKey, setSubmittingKey] = useState<string | null>(null);
   const [marks, setMarks] = useState<Record<string, EvidenceMark>>({});
 
   const filteredResults = useMemo(() => {
@@ -110,7 +111,7 @@ export function FinalResultPanel({
   }, [results, issueFilter]);
 
   const markCounts = useMemo(() => {
-    const counts: Record<EvalLabel, number> = { TP: 0, TF: 0, FP: 0, FF: 0 };
+    const counts: Record<EvalLabel, number> = { True: 0, False: 0 };
     Object.values(marks)
       .filter((m) => (auditId ? m.auditId === auditId : true))
       .forEach((m) => {
@@ -119,22 +120,45 @@ export function FinalResultPanel({
     return counts;
   }, [marks, auditId]);
 
-  const setLineMark = (
+  const setFindingMark = async (
     vulnName: string,
-    line: number,
     label: EvalLabel,
-  ): void => {
-    const key = markKey(auditId, vulnName, line);
+  ): Promise<void> => {
+    const key = markKey(auditId, vulnName, 0);
+    if (!auditId) {
+      return;
+    }
+
+    const previous = marks[key]?.label;
+    setSubmittingKey(key);
+    try {
+      if (previous === label) {
+        await clearAuditFeedback(auditId, vulnName);
+      } else {
+        await submitAuditFeedback(auditId, vulnName, label === "True");
+      }
+    } finally {
+      setSubmittingKey(null);
+    }
+
+    if (previous === label) {
+      setMarks((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+
     setMarks((prev) => ({
       ...prev,
       [key]: {
         auditId: auditId || "no-audit",
         vulnName,
-        line,
+        line: 0,
         label,
       },
     }));
-    setMarkMenuKey(null);
   };
 
   return (
@@ -190,16 +214,10 @@ export function FinalResultPanel({
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="rounded bg-slate-200 px-2 py-1 text-slate-700">
-                TP: {markCounts.TP}
+                True: {markCounts.True}
               </span>
               <span className="rounded bg-slate-200 px-2 py-1 text-slate-700">
-                TF: {markCounts.TF}
-              </span>
-              <span className="rounded bg-slate-200 px-2 py-1 text-slate-700">
-                FP: {markCounts.FP}
-              </span>
-              <span className="rounded bg-slate-200 px-2 py-1 text-slate-700">
-                FF: {markCounts.FF}
+                False: {markCounts.False}
               </span>
             </div>
           </div>
@@ -223,7 +241,7 @@ export function FinalResultPanel({
                   item.is_other || item.vuln_name.startsWith("OTHER::");
                 const resultMarkKey = markKey(auditId, item.vuln_name, 0);
                 const resultMark = marks[resultMarkKey]?.label;
-                const isResultMenuOpen = markMenuKey === resultMarkKey;
+                const isSubmitting = submittingKey === resultMarkKey;
 
                 return (
                   <article
@@ -253,41 +271,34 @@ export function FinalResultPanel({
                             Not in DB (OTHER)
                           </span>
                         )}
-                        {resultMark && (
-                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-700">
-                            {resultMark}
-                          </span>
-                        )}
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 rounded bg-[#1E293B] px-2 py-1 text-xs font-semibold text-white"
-                          onClick={() =>
-                            setMarkMenuKey(
-                              isResultMenuOpen ? null : resultMarkKey,
-                            )
-                          }
-                          title="Report this result"
+                          className={`rounded px-2 py-1 text-xs font-semibold ${
+                            resultMark === "True"
+                              ? "bg-emerald-600 text-white"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                          onClick={() => setFindingMark(item.vuln_name, "True")}
+                          disabled={!auditId || isSubmitting}
+                          title="Mark as True"
                         >
-                          <span>Report</span>
+                          True
                         </button>
-                        {isResultMenuOpen && (
-                          <div className="absolute right-0 top-8 z-10 flex gap-1 rounded border border-slate-300 bg-white p-1 shadow">
-                            {(["TP", "TF", "FP", "FF"] as EvalLabel[]).map(
-                              (label) => (
-                                <button
-                                  key={label}
-                                  type="button"
-                                  className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px] text-slate-700 hover:bg-slate-100"
-                                  onClick={() =>
-                                    setLineMark(item.vuln_name, 0, label)
-                                  }
-                                >
-                                  {label}
-                                </button>
-                              ),
-                            )}
-                          </div>
-                        )}
+                        <button
+                          type="button"
+                          className={`rounded px-2 py-1 text-xs font-semibold ${
+                            resultMark === "False"
+                              ? "bg-rose-600 text-white"
+                              : "bg-rose-100 text-rose-800"
+                          }`}
+                          onClick={() =>
+                            setFindingMark(item.vuln_name, "False")
+                          }
+                          disabled={!auditId || isSubmitting}
+                          title="Mark as False"
+                        >
+                          False
+                        </button>
                       </div>
                     </div>
 

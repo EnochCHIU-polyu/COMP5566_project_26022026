@@ -1,0 +1,12 @@
+{"ts": "2026-04-01T12:06:46.222707+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": true}
+{"ts": "2026-04-01T12:06:47.277873+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": false}
+{"ts": "2026-04-01T12:06:47.908861+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": true}
+{"ts": "2026-04-01T12:06:49.693734+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": false}
+{"ts": "2026-04-01T12:06:50.276867+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": true}
+{"ts": "2026-04-01T12:06:55.109260+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": false}
+{"ts": "2026-04-01T12:06:55.978189+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": true}
+{"ts": "2026-04-01T12:06:57.141218+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": false}
+{"ts": "2026-04-01T12:08:00.408461+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": true}
+{"ts": "2026-04-01T12:13:25.797089+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": true}
+{"ts": "2026-04-01T12:13:28.474910+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "clear": true}
+{"ts": "2026-04-01T12:13:29.002454+00:00", "audit_id": "e73b0f1b-4588-419f-a394-3a2c06d4d0e4", "vuln_name": "Access Control", "is_true": true}

@@ -63,3 +63,33 @@ export function streamAudit(
 
   return es;
 }
+
+export async function submitAuditFeedback(
+  auditId: string,
+  vulnName: string,
+  isTrue: boolean,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/v1/audits/${auditId}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vuln_name: vulnName, is_true: isTrue }),
+  });
+  if (!res.ok) {
+    throw new Error(`Submit feedback failed: ${res.status}`);
+  }
+}
+
+export async function clearAuditFeedback(
+  auditId: string,
+  vulnName: string,
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/audits/${auditId}/feedback?vuln_name=${encodeURIComponent(vulnName)}`,
+    {
+      method: "DELETE",
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Clear feedback failed: ${res.status}`);
+  }
+}
