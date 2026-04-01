@@ -45,11 +45,21 @@ LLM_TRACE_MAX_CHARS: int = int(os.getenv("LLM_TRACE_MAX_CHARS", "4000"))
 # "non_binary" → allow open-ended explanation (deep analysis)
 CLASSIFICATION_MODE: str = os.getenv("CLASSIFICATION_MODE", "non_binary")
 BATCH_VULNS_PER_PROMPT: int = int(os.getenv("BATCH_VULNS_PER_PROMPT", "8"))
+SLITHER_GATE_ENABLED: bool = _env_bool("SLITHER_GATE_ENABLED", True)
+SLITHER_GATE_MODEL: str = os.getenv("SLITHER_GATE_MODEL", DEFAULT_MODEL)
+MAPPING_USE_LLM_JUDGE: bool = _env_bool("MAPPING_USE_LLM_JUDGE", False)
+MAPPING_JUDGE_MODEL: str = os.getenv("MAPPING_JUDGE_MODEL", DEFAULT_MODEL)
+SHORTLIST_MIN_TYPES: int = int(os.getenv("SHORTLIST_MIN_TYPES", "3"))
+SHORTLIST_MAX_TYPES: int = int(os.getenv("SHORTLIST_MAX_TYPES", "6"))
 
 # ── Data Paths ────────────────────────────────────────────────────────────────
 DATA_DIR: str = os.path.join(os.path.dirname(__file__), "data")
 VULNERABLE_CONTRACTS_DIR: str = os.path.join(DATA_DIR, "vulnerable_contracts")
 SYNTHETIC_CONTRACTS_DIR: str = os.path.join(DATA_DIR, "synthetic_contracts")
+RUNTIME_AUDIT_METRICS_FILE: str = os.getenv(
+	"RUNTIME_AUDIT_METRICS_FILE",
+	os.path.join(DATA_DIR, "runtime_metrics", "audit_metrics.jsonl"),
+)
 
 # ── Supabase Settings ────────────────────────────────────────────────────────
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
@@ -66,4 +76,8 @@ SUPABASE_SUBMISSIONS_TABLE: str = os.getenv(
 SUPABASE_VULNERABILITIES_TABLE: str = os.getenv(
 	"SUPABASE_VULNERABILITIES_TABLE",
 	"vulnerability_types",
+)
+SUPABASE_OTHER_VULNERABILITIES_TABLE: str = os.getenv(
+	"SUPABASE_OTHER_VULNERABILITIES_TABLE",
+	"vulnerability_types_other_candidates",
 )

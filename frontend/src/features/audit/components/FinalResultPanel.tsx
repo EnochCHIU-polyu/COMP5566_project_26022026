@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import type { AuditVulnResult } from "../types";
+import type { AuditMappingInfo, AuditVulnResult } from "../types";
 
 type IssueFilter = "all" | "issue" | "no-issue";
 type EvalLabel = "TP" | "TF" | "FP" | "FF";
@@ -15,6 +15,7 @@ interface EvidenceMark {
 interface Props {
   summary: string;
   results: AuditVulnResult[];
+  mapping?: AuditMappingInfo | null;
   sourceCode: string;
   error: string | null;
   auditId?: string | null;
@@ -87,6 +88,7 @@ function markKey(
 export function FinalResultPanel({
   summary,
   results,
+  mapping,
   sourceCode,
   error,
   auditId,
@@ -94,7 +96,7 @@ export function FinalResultPanel({
   mode,
   pipeline,
 }: Props) {
-  const [issueFilter, setIssueFilter] = useState<IssueFilter>("all");
+  const [issueFilter, setIssueFilter] = useState<IssueFilter>("issue");
   const [markMenuKey, setMarkMenuKey] = useState<string | null>(null);
   const [marks, setMarks] = useState<Record<string, EvidenceMark>>({});
 
@@ -156,6 +158,20 @@ export function FinalResultPanel({
         </p>
       ) : summary || results.length > 0 ? (
         <div className="mt-3 space-y-3">
+          {mapping && (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+              <div>
+                Mapping summary: mapped findings {mapping.mapped_count},
+                not-in-DB {mapping.other_count}
+              </div>
+              {!!mapping.db_types?.length && (
+                <div className="mt-1">
+                  DB types audited: {mapping.db_types.join(", ")}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 p-2">
             <div className="flex items-center gap-2 text-sm">
               <label htmlFor="issue-filter" className="text-slate-600">
@@ -203,6 +219,8 @@ export function FinalResultPanel({
               {filteredResults.map((item) => {
                 const evidenceLines = extractEvidenceLines(item.response || "");
                 const positive = isPositive(item.response || "");
+                const isOther =
+                  item.is_other || item.vuln_name.startsWith("OTHER::");
                 const resultMarkKey = markKey(auditId, item.vuln_name, 0);
                 const resultMark = marks[resultMarkKey]?.label;
                 const isResultMenuOpen = markMenuKey === resultMarkKey;
@@ -230,6 +248,11 @@ export function FinalResultPanel({
                         >
                           {positive ? "Potential Issue" : "No Clear Issue"}
                         </span>
+                        {isOther && (
+                          <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
+                            Not in DB (OTHER)
+                          </span>
+                        )}
                         {resultMark && (
                           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-700">
                             {resultMark}

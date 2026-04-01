@@ -16,6 +16,7 @@ export function AuditPage() {
     llmChunks,
     finalSummary,
     finalResults,
+    finalMapping,
     model,
     mode,
     pipeline,
@@ -97,6 +98,7 @@ export function AuditPage() {
         <FinalResultPanel
           summary={finalSummary}
           results={finalResults}
+          mapping={finalMapping}
           sourceCode={sourceCode}
           error={error}
           auditId={auditId}

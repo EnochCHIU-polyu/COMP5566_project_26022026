@@ -23,6 +23,7 @@ const initialState: AuditRunState = {
   llmChunks: [],
   finalSummary: "",
   finalResults: [],
+  finalMapping: null,
   contractName: "",
   sourceCode: "",
   model: "deepseek-v3.2",
@@ -79,6 +80,10 @@ export const useAuditStore = create<AuditStore>((set) => ({
         next.finalResults = Array.isArray(evt.payload.results)
           ? (evt.payload.results as AuditVulnResult[])
           : [];
+        next.finalMapping =
+          evt.payload.mapping && typeof evt.payload.mapping === "object"
+            ? (evt.payload.mapping as AuditRunState["finalMapping"])
+            : null;
         next.isRunning = false;
       }
       if (evt.event === "audit_failed") {

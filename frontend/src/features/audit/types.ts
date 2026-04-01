@@ -22,6 +22,15 @@ export interface AuditEvent {
 export interface AuditVulnResult {
   vuln_name: string;
   response: string;
+  is_other?: boolean;
+  mapped_from_db?: boolean;
+}
+
+export interface AuditMappingInfo {
+  mapped_count: number;
+  other_count: number;
+  db_types?: string[];
+  other_candidates?: Array<Record<string, unknown>>;
 }
 
 export interface AuditRunState {
@@ -33,6 +42,7 @@ export interface AuditRunState {
   llmChunks: string[];
   finalSummary: string;
   finalResults: AuditVulnResult[];
+  finalMapping: AuditMappingInfo | null;
   contractName: string;
   sourceCode: string;
   model: string;
