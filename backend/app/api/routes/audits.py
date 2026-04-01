@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -16,6 +18,83 @@ router = APIRouter(prefix="/api/v1/audits", tags=["audits"])
 
 def _sse_format(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _load_runtime_metrics(limit: int = 100) -> dict:
+    metrics_path = Path(
+        os.getenv("RUNTIME_AUDIT_METRICS_FILE", "data/runtime_metrics/audit_metrics.jsonl")
+    )
+    if not metrics_path.exists():
+        return {
+            "summary": {
+                "total_runs": 0,
+                "completed_runs": 0,
+                "failed_runs": 0,
+                "avg_duration_seconds": 0.0,
+                "avg_risk_score": 0.0,
+                "total_other_findings": 0,
+                "avg_other_findings_per_completed_run": 0.0,
+            },
+            "records": [],
+            "source": str(metrics_path),
+        }
+
+    records: list[dict] = []
+    try:
+        with metrics_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict):
+                        records.append(obj)
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return {
+            "summary": {
+                "total_runs": 0,
+                "completed_runs": 0,
+                "failed_runs": 0,
+                "avg_duration_seconds": 0.0,
+                "avg_risk_score": 0.0,
+                "total_other_findings": 0,
+                "avg_other_findings_per_completed_run": 0.0,
+            },
+            "records": [],
+            "source": str(metrics_path),
+        }
+
+    total = len(records)
+    completed = [r for r in records if str(r.get("status", "")).lower() == "completed"]
+    failed = [r for r in records if str(r.get("status", "")).lower() == "failed"]
+
+    def _avg(nums: list[float]) -> float:
+        if not nums:
+            return 0.0
+        return round(sum(nums) / len(nums), 3)
+
+    durations = [float(r.get("duration_seconds", 0.0) or 0.0) for r in completed]
+    risks = [float(r.get("risk_score", 0.0) or 0.0) for r in completed]
+    other_counts = [max(0, int(r.get("other_count", 0) or 0)) for r in completed]
+
+    recent = records[-max(1, limit) :]
+    recent.reverse()
+    return {
+        "summary": {
+            "total_runs": total,
+            "completed_runs": len(completed),
+            "failed_runs": len(failed),
+            "avg_duration_seconds": _avg(durations),
+            "avg_risk_score": _avg(risks),
+            "total_other_findings": int(sum(other_counts)),
+            "avg_other_findings_per_completed_run": _avg([float(x) for x in other_counts]),
+        },
+        "records": recent,
+        "source": str(metrics_path),
+    }
 
 
 @router.post("", response_model=AuditCreateResponse)
@@ -62,3 +141,8 @@ async def stream_audit_events(audit_id: str) -> StreamingResponse:
             await sse_manager.unsubscribe(audit_id, queue)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.get("/metrics/runtime")
+async def get_runtime_metrics(limit: int = 100) -> dict:
+    return _load_runtime_metrics(limit=limit)

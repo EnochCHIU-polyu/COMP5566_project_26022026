@@ -5,7 +5,7 @@ const navItems = [
   { to: "/audit", label: "Audit" },
   { to: "/benchmark", label: "Benchmark" },
   { to: "/new-vulnerability", label: "New Vulnerability" },
-  { to: "/more (wip)", label: "More (WIP)" },
+  { to: "/evaluation", label: "Evaluation" },
 ];
 
 function linkClass(active: boolean): string {
