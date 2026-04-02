@@ -27,6 +27,7 @@ from app.schemas.benchmark import (
     BenchmarkRunRequest,
     BenchmarkRunResponse,
 )
+from app.utils.async_compat import to_thread
 
 
 class BenchmarkService:
@@ -44,7 +45,7 @@ class BenchmarkService:
                 },
             ]
             response = await asyncio.wait_for(
-                asyncio.to_thread(query_llm, messages, model, 0.0),
+                to_thread(query_llm, messages, model, 0.0),
                 timeout=30,
             )
             latency_ms = int((time.perf_counter() - started) * 1000)
@@ -69,7 +70,7 @@ class BenchmarkService:
         limit: int,
         prefer_shared_db: bool,
     ) -> BenchmarkLoadResponse:
-        contracts = await asyncio.to_thread(
+        contracts = await to_thread(
             load_benchmark,
             dataset,
             prefer_shared_db,
@@ -109,7 +110,7 @@ class BenchmarkService:
         if req.mode == "multi_vuln":
             raise ValueError("multi_vuln mode is not supported for benchmark scoring")
 
-        contracts = await asyncio.to_thread(
+        contracts = await to_thread(
             load_benchmark,
             req.dataset,
             req.prefer_shared_db,
@@ -127,13 +128,17 @@ class BenchmarkService:
 
         bench_vulns = sorted({v for vulns in ground_truth.values() for v in vulns})
 
+        # Vulnerability scoring uses ``vuln_filter=bench_vulns``; ``analyze_contract`` /
+        # ``analyze_contract_cascade`` (filtered) / ``run_multi_llm_audit`` all resolve types
+        # via ``run_batched_vulnerability_audit`` (chunked JSON, ``vuln_name``-keyed parse).
+
         audit_results: list[dict[str, Any]] = []
         for contract in subset:
             name = str(contract.get("name", "Unknown"))
             raw_source = str(contract.get("source_code", ""))
 
             try:
-                preprocessed = await asyncio.to_thread(
+                preprocessed = await to_thread(
                     preprocess_contract,
                     raw_source,
                     model=req.model,
@@ -141,7 +146,7 @@ class BenchmarkService:
                 source_code = str(preprocessed.get("source_code", ""))
 
                 if req.pipeline == "cascade":
-                    result = await asyncio.to_thread(
+                    result = await to_thread(
                         analyze_contract_cascade,
                         source_code,
                         name,
@@ -156,7 +161,7 @@ class BenchmarkService:
                     )
                 elif req.pipeline == "multi_llm":
                     models = req.multi_models or [req.model]
-                    result = await asyncio.to_thread(
+                    result = await to_thread(
                         run_multi_llm_audit,
                         source_code,
                         name,
@@ -172,7 +177,7 @@ class BenchmarkService:
                         "",
                     )
                 else:
-                    result = await asyncio.to_thread(
+                    result = await to_thread(
                         analyze_contract,
                         source_code,
                         name,
@@ -203,7 +208,7 @@ class BenchmarkService:
                     }
                 )
 
-        scores = await asyncio.to_thread(evaluate_batch, audit_results, ground_truth)
+        scores = await to_thread(evaluate_batch, audit_results, ground_truth)
 
         return BenchmarkRunResponse(
             dataset=req.dataset,

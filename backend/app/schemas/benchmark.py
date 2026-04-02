@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,15 +12,15 @@ BenchmarkMode = Literal["binary", "non_binary", "cot", "multi_vuln"]
 
 class BenchmarkContractPreview(BaseModel):
     name: str
-    labels: list[str] = Field(default_factory=list)
+    labels: List[str] = Field(default_factory=list)
     source_preview: str = ""
 
 
 class BenchmarkLoadResponse(BaseModel):
     dataset: BenchmarkDataset
     loaded: int
-    contracts: list[BenchmarkContractPreview] = Field(default_factory=list)
-    vuln_types_under_test: list[str] = Field(default_factory=list)
+    contracts: List[BenchmarkContractPreview] = Field(default_factory=list)
+    vuln_types_under_test: List[str] = Field(default_factory=list)
 
 
 class BenchmarkRunRequest(BaseModel):
@@ -35,7 +35,7 @@ class BenchmarkRunRequest(BaseModel):
     pipeline: BenchmarkPipeline = "standard"
     cascade_small: str = "deepseek-v3.2"
     cascade_large: str = "deepseek-v3.2"
-    multi_models: list[str] = Field(default_factory=lambda: ["deepseek-v3.2", "gpt-4o-mini"])
+    multi_models: List[str] = Field(default_factory=lambda: ["deepseek-v3.2", "gpt-4o-mini"])
     multi_parallel: bool = False
     multi_aggregation: Literal["majority", "consensus"] = "majority"
 
@@ -43,14 +43,14 @@ class BenchmarkRunRequest(BaseModel):
 class BenchmarkRunResponse(BaseModel):
     dataset: BenchmarkDataset
     loaded: int
-    vuln_types_under_test: list[str] = Field(default_factory=list)
-    scores: dict[str, Any] = Field(default_factory=dict)
-    audit_results: list[dict[str, Any]] = Field(default_factory=list)
+    vuln_types_under_test: List[str] = Field(default_factory=list)
+    scores: Dict[str, Any] = Field(default_factory=dict)
+    audit_results: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class BenchmarkLlmCheckResponse(BaseModel):
     ok: bool
     model: str
-    latency_ms: int | None = None
+    latency_ms: Optional[int] = None
     preview: str = ""
-    error: str | None = None
+    error: Optional[str] = None

@@ -1,10 +1,10 @@
 """
-Phase 2 – LLM Engine: Chain-of-Thought analyzer.
+Phase 2 – LLM Engine: Contract analyzer.
 
-Implements the CoT looping script that:
-1. Extracts all function names from a contract.
-2. Queries the LLM to review each function individually.
-3. Also iterates through all 38 vulnerability types, injecting definitions.
+Default path: batched JSON over vulnerability types (chunked by ``BATCH_VULNS_PER_PROMPT``),
+one model response listing ``results[]`` per type — code maps ``vuln_name`` to rows.
+
+Optional ``sequential_vuln_audit=True`` restores per-type LLM calls plus per-function CoT.
 """
 
 from __future__ import annotations
@@ -25,9 +25,15 @@ from phase2_llm_engine.prompt_builder import (
 )
 from phase2_llm_engine.vulnerability_store import get_vulnerability_types
 from phase2_llm_engine.llm_client import query_llm
-from config import CLASSIFICATION_MODE
+from config import BATCH_VULNS_PER_PROMPT, CLASSIFICATION_MODE
 
 logger = logging.getLogger(__name__)
+
+
+def _chunk_vuln_names(names: list[str], chunk_size: int) -> list[list[str]]:
+    if chunk_size <= 0:
+        return [names]
+    return [names[i : i + chunk_size] for i in range(0, len(names), chunk_size)]
 
 
 def _parse_batch_json_response(raw: str, vuln_names: list[str]) -> list[dict]:
@@ -72,30 +78,61 @@ def _parse_batch_json_response(raw: str, vuln_names: list[str]) -> list[dict]:
 def _run_batch_audit_for_model(
     source_code: str,
     contract_name: str,
-    model: str,
+    model: Optional[str],
     mode: str,
     temperature: Optional[float],
     vuln_filter: Sequence[str],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     slither_reference: str = "",
 ) -> dict:
-    """Run batch prompt for one model (same format as Standard mode, better detection)."""
+    """
+    **Canonical multi-class audit:** one structured JSON per chunk; rows matched by ``vuln_name``.
+
+    Flow: ``build_batch_audit_prompt`` → ``query_llm`` → ``_parse_batch_json_response``
+    (each ``results[]`` item must reuse the exact catalog name). Chunk size:
+    ``BATCH_VULNS_PER_PROMPT``.
+    """
     vulnerability_types = get_vulnerability_types()
-    vuln_set = set(vuln_filter)
-    selected = [v for v in vulnerability_types if v["name"] in vuln_set]
-    messages = build_batch_audit_prompt(
-        source_code,
-        selected,
-        mode,
-        slither_reference=slither_reference,
-    )
-    raw = query_llm(messages, model=model, temperature=temperature)
-    vuln_results = _parse_batch_json_response(raw, list(vuln_filter))
+    catalog_by_name = {str(v.get("name", "")).strip(): v for v in vulnerability_types if str(v.get("name", "")).strip()}
+    vuln_set = {str(x).strip() for x in vuln_filter if str(x).strip()}
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for n in vuln_filter:
+        key = str(n).strip()
+        if key in catalog_by_name and key not in seen:
+            ordered.append(key)
+            seen.add(key)
+    for key in sorted(vuln_set - seen):
+        if key in catalog_by_name:
+            ordered.append(key)
+
+    chunk_size = max(1, int(BATCH_VULNS_PER_PROMPT) or 8)
+    chunks = _chunk_vuln_names(ordered, chunk_size)
+    vuln_results: list[dict] = []
+    total_chunks = len(chunks)
+
+    for ci, chunk in enumerate(chunks):
+        selected = [catalog_by_name[n] for n in chunk]
+        messages = build_batch_audit_prompt(
+            source_code,
+            selected,
+            mode,
+            slither_reference=slither_reference,
+        )
+        raw = query_llm(messages, model=model, temperature=temperature)
+        vuln_results.extend(_parse_batch_json_response(raw, chunk))
+        if progress_callback:
+            progress_callback(ci + 1, total_chunks, f"batch_json_chunk_{ci + 1}/{total_chunks}")
+
     return {
         "contract_name": contract_name,
         "vuln_results": vuln_results,
         "function_results": [],
     }
+
+
+# Public alias — benchmark / services should rely on this pattern only for list-of-types audits.
+run_batched_vulnerability_audit = _run_batch_audit_for_model
 
 
 def _build_structured_result(vuln_results: list[dict], function_results: list[dict]) -> dict:
@@ -129,11 +166,15 @@ def analyze_contract(
     agent_mode: bool = False,
     agent_judge_model: Optional[str] = None,
     vuln_filter: Optional[Sequence[str]] = None,
+    sequential_vuln_audit: bool = False,
     slither_reference: str = "",
 ) -> dict:
     """
-    Run a full audit of *source_code* using all 38 vulnerability types and
-    a Chain-of-Thought pass over every function.
+    Run a vulnerability-type audit of *source_code* using the catalog (or a filter).
+
+    By default uses **batched JSON**: the model returns a ``results`` array;
+    the parser aligns each row to ``vuln_name`` (chunked via ``BATCH_VULNS_PER_PROMPT``).
+    ``function_results`` is empty unless ``sequential_vuln_audit=True``.
 
     Parameters
     ----------
@@ -161,7 +202,10 @@ def analyze_contract(
         Model for reflection step (default: same as model). Use a different
         model for cross-checking (e.g. analyzer=gpt-4o, judge=claude).
     vuln_filter : sequence of str, optional
-        If provided, only check these vulnerability type names.
+        If provided, only these names are requested; otherwise **all** catalog types.
+    sequential_vuln_audit : bool
+        If True, use one LLM call per type and run per-function CoT (legacy).
+        Ignored when ``agent_mode`` or ``verify`` is True (those paths stay sequential).
 
     Returns
     -------
@@ -203,7 +247,28 @@ def analyze_contract(
             result["verified_findings"] = []
         return result
 
-    # ── Phase A: iterate over all 38 vulnerability types ─────────────────────
+    # ── Batched JSON: all catalog types or ``vuln_filter`` (chunked) ───────────
+    if not agent_mode and not verify and not sequential_vuln_audit:
+        if vuln_filter:
+            names_for_batch: Sequence[str] = vuln_filter
+        else:
+            names_for_batch = [
+                str(v["name"])
+                for v in vulnerability_types
+                if str(v.get("name", "")).strip()
+            ]
+        return run_batched_vulnerability_audit(
+            source_code=source_code,
+            contract_name=contract_name,
+            model=model,
+            mode=effective_mode,
+            temperature=temperature,
+            vuln_filter=names_for_batch,
+            progress_callback=progress_callback,
+            slither_reference=slither_reference,
+        )
+
+    # ── Phase A: sequential per-type (agent / verify / sequential_vuln_audit) ──
     vulns_to_check = vulnerability_types
     if vuln_filter:
         vuln_set = set(vuln_filter)
@@ -342,10 +407,11 @@ def analyze_contract_cascade(
     slither_reference: str = "",
 ) -> dict:
     """
-    Two-tier audit: cheap binary model first; expensive model only when the first pass
-    does not clearly rule out the vulnerability (faster than running large on every vuln).
+    Two-tier audit without ``vuln_filter``: per-type small→large, then CoT per function.
 
-    CoT per-function still uses ``large_model`` only.
+    With ``vuln_filter`` and ``verify`` False: **only batched JSON** — binary batch on
+    ``small_model``, then ``non_binary`` batch on ``large_model`` for types not clearly NO
+    (same ``vuln_name`` alignment as :func:`run_batched_vulnerability_audit`).
     """
     logger.info(
         "Cascade audit '%s' | small=%s large=%s",
@@ -353,6 +419,68 @@ def analyze_contract_cascade(
         small_model,
         large_model,
     )
+
+    if vuln_filter and not verify:
+        small_batch = run_batched_vulnerability_audit(
+            source_code=source_code,
+            contract_name=contract_name,
+            model=small_model,
+            mode="binary",
+            temperature=temperature,
+            vuln_filter=vuln_filter,
+            progress_callback=progress_callback,
+            slither_reference=slither_reference,
+        )
+        large_by: dict[str, str] = {}
+        need_names = [
+            vr["vuln_name"]
+            for vr in small_batch["vuln_results"]
+            if not _cascade_small_clear_no(vr.get("response", ""))
+        ]
+        if need_names:
+            large_batch = run_batched_vulnerability_audit(
+                source_code=source_code,
+                contract_name=contract_name,
+                model=large_model,
+                mode="non_binary",
+                temperature=temperature,
+                vuln_filter=need_names,
+                progress_callback=progress_callback,
+                slither_reference=slither_reference,
+            )
+            large_by = {vr["vuln_name"]: vr["response"] for vr in large_batch["vuln_results"]}
+
+        merged: list[dict] = []
+        for vr in small_batch["vuln_results"]:
+            name = vr["vuln_name"]
+            resp = vr.get("response", "")
+            if _cascade_small_clear_no(resp):
+                merged.append({
+                    "vuln_name": name,
+                    "response": (
+                        f"NO\n\n[Cascade: {small_model} binary — {large_model} skipped]\n\n{resp}"
+                    ),
+                })
+            else:
+                lg = large_by.get(name, "ERROR: Missing deep batch result for this type")
+                merged.append({
+                    "vuln_name": name,
+                    "response": (
+                        f"[Cascade: {small_model} → {large_model}]\n\n"
+                        f"--- Cheap pass ---\n{resp}\n\n--- Deep pass ---\n{lg}"
+                    ),
+                })
+        return {
+            "contract_name": contract_name,
+            "vuln_results": merged,
+            "function_results": [],
+            "cascade": {
+                "small_model": small_model,
+                "large_model": large_model,
+                "vulnerability_pass": "batched_json",
+            },
+        }
+
     vulnerability_types = get_vulnerability_types()
     vulns_to_check = vulnerability_types
     if vuln_filter:
@@ -522,7 +650,7 @@ def run_multi_llm_audit(
 
     def _run_one_model(model: str) -> dict:
         if use_batch:
-            return _run_batch_audit_for_model(
+            return run_batched_vulnerability_audit(
                 source_code=source_code,
                 contract_name=contract_name,
                 model=model,

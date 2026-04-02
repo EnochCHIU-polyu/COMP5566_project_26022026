@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal
 
 from pydantic import BaseModel, Field
 
@@ -45,11 +45,11 @@ class AuditEvent(BaseModel):
     stage: AuditStage
     seq: int
     ts: datetime
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AuditSnapshot(BaseModel):
     audit_id: str
     stage: AuditStage
     status: str
-    events: list[AuditEvent] = Field(default_factory=list)
+    events: List[AuditEvent] = Field(default_factory=list)

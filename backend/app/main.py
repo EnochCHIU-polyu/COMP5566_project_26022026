@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Dict
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,5 +33,5 @@ app.include_router(vulnerabilities_router)
 
 
 @app.get("/healthz")
-async def healthz() -> dict[str, str]:
+async def healthz() -> Dict[str, str]:
     return {"status": "ok"}

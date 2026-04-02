@@ -48,6 +48,7 @@ from config import (
 
 from app.schemas.audit import AuditCreateRequest
 from app.services.sse_manager import sse_manager
+from app.utils.async_compat import to_thread
 
 
 logger = logging.getLogger(__name__)
@@ -353,7 +354,7 @@ async def _run_other_detail_checks_streaming(
         )
         messages = _build_other_detail_messages(source_code, item, slither_reference)
         raw = await asyncio.wait_for(
-            asyncio.to_thread(query_llm, messages, model, temperature),
+            to_thread(query_llm, messages, model, temperature),
             timeout=LLM_BATCH_TIMEOUT_SECONDS,
         )
         payload = _extract_json_payload(raw) or {}
@@ -426,7 +427,7 @@ async def _run_standard_batched_checks_streaming(
 
         try:
             raw_response = await asyncio.wait_for(
-                asyncio.to_thread(
+                to_thread(
                     query_llm,
                     messages,
                     model,
@@ -496,7 +497,7 @@ class AuditService:
                 payload={"message": "Running Slither detectors"},
             )
 
-            catalog_meta = await asyncio.to_thread(get_vulnerability_catalog_meta)
+            catalog_meta = await to_thread(get_vulnerability_catalog_meta)
             catalog_count = int(catalog_meta.get("count", 0) or 0)
             catalog_source = str(catalog_meta.get("source", "unknown"))
             logger.info(
@@ -506,14 +507,14 @@ class AuditService:
                 catalog_count,
             )
 
-            vuln_catalog = await asyncio.to_thread(get_vulnerability_types)
+            vuln_catalog = await to_thread(get_vulnerability_types)
             logger.info(
                 "Audit %s using vulnerability snapshot count=%d",
                 audit_id,
                 len(vuln_catalog),
             )
 
-            preprocessed = await asyncio.to_thread(
+            preprocessed = await to_thread(
                 preprocess_contract,
                 req.source_code,
                 model=req.model,
@@ -521,7 +522,7 @@ class AuditService:
             source_for_audit = preprocessed["source_code"]
 
             if is_slither_available():
-                slither_result = await asyncio.to_thread(
+                slither_result = await to_thread(
                     run_slither_analysis,
                     source_for_audit,
                     f"{req.contract_name or 'Contract'}.sol",
@@ -561,7 +562,7 @@ class AuditService:
                 "raw_response": "",
             }
             if SLITHER_GATE_ENABLED:
-                gate = await asyncio.to_thread(
+                gate = await to_thread(
                     decide_contract_gate,
                     source_for_audit,
                     slither_result,
@@ -617,7 +618,7 @@ class AuditService:
                 )
                 return
 
-            mapping = await asyncio.to_thread(
+            mapping = await to_thread(
                 map_findings_to_catalog,
                 slither_hits,
                 vuln_catalog,
@@ -625,7 +626,7 @@ class AuditService:
                 req.temperature,
                 bool(MAPPING_USE_LLM_JUDGE),
             )
-            llm_discovery = await asyncio.to_thread(
+            llm_discovery = await to_thread(
                 discover_vulnerability_types_with_llm,
                 source_for_audit,
                 slither_reference,
@@ -690,7 +691,7 @@ class AuditService:
             )
             effective_names = sorted(set(discovered_db_types)) if discovered_db_types else slither_only_names
 
-            await asyncio.to_thread(_store_other_candidates, audit_id, other_candidates)
+            await to_thread(_store_other_candidates, audit_id, other_candidates)
 
             await sse_manager.publish(
                 audit_id,
@@ -722,7 +723,7 @@ class AuditService:
 
             if req.pipeline == "cascade" and effective_names:
                 cascade_result = await asyncio.wait_for(
-                    asyncio.to_thread(
+                    to_thread(
                         analyze_contract_cascade,
                         source_for_audit,
                         req.contract_name,
@@ -743,7 +744,7 @@ class AuditService:
                 # Keep order but remove duplicates.
                 unique_models = list(dict.fromkeys(model_pool))
                 multi_result = await asyncio.wait_for(
-                    asyncio.to_thread(
+                    to_thread(
                         run_multi_llm_audit,
                         source_for_audit,
                         req.contract_name,

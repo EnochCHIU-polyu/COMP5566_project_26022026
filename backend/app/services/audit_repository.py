@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Dict, Optional
 
 from app.schemas.audit import AuditEvent, AuditSnapshot
 
@@ -44,7 +44,7 @@ class AuditRepository:
         audit_id: str,
         status: str,
         stage: str,
-        metadata: dict[str, Any] | None = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         if not self.enabled:
             return
@@ -75,7 +75,7 @@ class AuditRepository:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Supabase insert_event failed for %s: %s", event.audit_id, exc)
 
-    def load_snapshot(self, audit_id: str) -> AuditSnapshot | None:
+    def load_snapshot(self, audit_id: str) -> Optional[AuditSnapshot]:
         if not self.enabled:
             return None
 

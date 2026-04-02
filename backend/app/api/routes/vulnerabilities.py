@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Dict
 
 from fastapi import APIRouter, HTTPException
 
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/v1/vulnerabilities", tags=["vulnerabilities"])
 
 
 @router.get("/catalog")
-async def get_vulnerability_catalog() -> dict[str, object]:
+async def get_vulnerability_catalog() -> Dict[str, object]:
     meta = get_vulnerability_catalog_meta()
     return {
         "count": meta["count"],

@@ -4,7 +4,7 @@ import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from app.schemas.audit import AuditEvent, AuditSnapshot
 from app.services.audit_repository import audit_repository
@@ -15,13 +15,13 @@ class AuditState:
     stage: str = "queued"
     status: str = "queued"
     seq: int = 0
-    events: list[AuditEvent] = field(default_factory=list)
+    events: List[AuditEvent] = field(default_factory=list)
 
 
 class SSEManager:
     def __init__(self) -> None:
-        self._queues: dict[str, list[asyncio.Queue[AuditEvent]]] = defaultdict(list)
-        self._state: dict[str, AuditState] = defaultdict(AuditState)
+        self._queues: Dict[str, List[asyncio.Queue[AuditEvent]]] = defaultdict(list)
+        self._state: Dict[str, AuditState] = defaultdict(AuditState)
         self._known_ids: set[str] = set()
 
     def create_audit(self, audit_id: str) -> None:
@@ -56,7 +56,7 @@ class SSEManager:
         audit_id: str,
         event: str,
         stage: str,
-        payload: dict[str, Any] | None = None,
+        payload: Optional[Dict[str, Any]] = None,
     ) -> AuditEvent:
         state = self._state[audit_id]
         state.seq += 1
