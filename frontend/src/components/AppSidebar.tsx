@@ -4,7 +4,6 @@ const navItems = [
   { to: "/", label: "Home Page" },
   { to: "/audit", label: "Audit" },
   { to: "/benchmark", label: "Benchmark" },
-  { to: "/new-vulnerability", label: "New Vulnerability" },
   { to: "/evaluation", label: "Evaluation" },
 ];
 
