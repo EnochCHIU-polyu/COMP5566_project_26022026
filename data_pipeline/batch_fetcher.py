@@ -151,9 +151,13 @@ def _fetch_source(address: str, api_key: str, timeout: int = 30) -> dict[str, An
     data = resp.json()
 
     if data.get("status") != "1" or not data.get("result"):
-        # API-level error (e.g. invalid address) — record the message
-        msg = data.get("message") or data.get("result") or "unknown API error"
-        return {"_error": str(msg)}
+        # Etherscan always sets message="NOTOK" on errors; the *result* field
+        # carries the human-readable reason (e.g. "Contract source code not
+        # verified", "Missing/Invalid API Key").  Prefer result over message.
+        raw_result = data.get("result")
+        result_str = str(raw_result) if isinstance(raw_result, str) and raw_result else ""
+        msg = result_str or data.get("message") or "unknown API error"
+        return {"_error": msg}
 
     return data["result"][0]
 
@@ -330,9 +334,17 @@ def _process_address(
     entry["fetched_at"] = datetime.now(timezone.utc).isoformat()
 
     if "_error" in result:
-        entry["status"] = "api_error"
-        entry["error"] = result["_error"]
-        logger.warning("[%s] API error: %s", address, result["_error"])
+        error_msg = result["_error"]
+        # Classify "Contract source code not verified" separately so the caller
+        # knows this is expected (unverified contract), not an API misconfiguration.
+        if "not verified" in error_msg.lower() or "source code not verified" in error_msg.lower():
+            entry["status"] = "not_verified"
+            entry["error"] = error_msg
+            logger.info("[%s] Not verified: %s", address, error_msg)
+        else:
+            entry["status"] = "api_error"
+            entry["error"] = error_msg
+            logger.warning("[%s] API error: %s", address, error_msg)
         return entry
 
     source_code = result.get("SourceCode", "")
