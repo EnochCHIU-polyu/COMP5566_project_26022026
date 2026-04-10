@@ -1,0 +1,6 @@
+[submodule "data/benchmarks/smartbugs"]
+	path = data/benchmarks/smartbugs
+	url = https://github.com/smartbugs/smartbugs-curated.git
+[submodule "data/benchmarks/solidifi"]
+	path = data/benchmarks/solidifi
+	url = https://github.com/smartbugs/SolidiFI-benchmark

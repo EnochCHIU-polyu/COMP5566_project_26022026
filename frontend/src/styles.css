@@ -1,0 +1,171 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --aw-bg-0: #ffffff;
+  --aw-bg-1: #f8fafc;
+  --aw-surface: #ffffff;
+  --aw-surface-soft: #f8fafc;
+  --aw-border: #cbd5e1;
+  --aw-text: #1e293b;
+  --aw-text-muted: #475569;
+  --aw-accent: #1e293b;
+  --aw-accent-soft: rgba(30, 41, 59, 0.08);
+  --aw-ok: #34d399;
+  --aw-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", "Segoe UI", sans-serif;
+  color: var(--aw-text);
+  background: var(--aw-bg-0);
+}
+
+.bg-app-gradient {
+  background:
+    radial-gradient(circle at 8% 8%, rgba(30, 41, 59, 0.06), transparent 36%),
+    radial-gradient(circle at 92% 4%, rgba(148, 163, 184, 0.08), transparent 30%),
+    linear-gradient(180deg, var(--aw-bg-0), var(--aw-bg-1));
+}
+
+@layer components {
+  .aw-app-layout {
+    @apply relative w-full;
+  }
+
+  .aw-app-content {
+    @apply w-full pl-4;
+  }
+
+  .aw-app-content-expanded {
+    @apply pl-14;
+  }
+
+  .aw-shell {
+    @apply mx-auto w-full max-w-[1380px];
+  }
+
+  .aw-sidebar {
+    @apply fixed left-0 top-0 z-40 h-screen w-[248px] rounded-none rounded-r-2xl border-l-0 border-t-0;
+  }
+
+  .aw-sidebar-reopen {
+    @apply fixed left-2 top-3 z-40 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-[#1E293B] shadow;
+    transform-origin: left top;
+    transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+    will-change: transform;
+  }
+
+  .aw-sidebar-reopen:hover,
+  .aw-sidebar-reopen:focus-visible {
+    transform: scale(2.3);
+    background-color: #f8fafc;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.2);
+  }
+
+  .aw-sidebar-reopen:active {
+    transform: scale(1.45);
+  }
+
+  @media (min-width: 1280px) {
+    .aw-app-content {
+      padding-left: 260px;
+    }
+
+    .aw-app-content-expanded {
+      padding-left: 56px;
+    }
+  }
+
+  .aw-side-link {
+    @apply rounded-md border border-slate-300 px-3 py-2 text-sm text-[#1E293B] transition hover:bg-slate-50;
+  }
+
+  .aw-side-link-active {
+    border-color: rgba(30, 41, 59, 0.25);
+    color: #1e293b;
+    background: var(--aw-accent-soft);
+    font-weight: 600;
+  }
+
+  .aw-card {
+    @apply rounded-2xl border p-5;
+    border-color: var(--aw-border);
+    background: color-mix(in srgb, var(--aw-surface) 92%, transparent);
+    box-shadow: var(--aw-shadow);
+  }
+
+  .aw-title {
+    font-family: "DM Sans", "Inter", sans-serif;
+    letter-spacing: -0.01em;
+  }
+
+  .aw-subtle {
+    color: var(--aw-text-muted);
+  }
+
+  .aw-input {
+    @apply w-full rounded-md border px-3 py-2 text-sm outline-none transition;
+    border-color: var(--aw-border);
+    background: var(--aw-surface-soft);
+    color: var(--aw-text);
+  }
+
+  .aw-input:focus {
+    border-color: var(--aw-accent);
+    box-shadow: 0 0 0 3px rgba(253, 54, 110, 0.2);
+  }
+
+  .aw-chip {
+    @apply rounded-md border px-2 py-1 text-xs;
+    border-color: var(--aw-border);
+    color: var(--aw-text-muted);
+    background: rgba(255, 255, 255, 0.01);
+  }
+
+  .aw-chip-accent {
+    border-color: rgba(30, 41, 59, 0.25);
+    color: #1e293b;
+    background: var(--aw-accent-soft);
+  }
+
+  .aw-button {
+    @apply w-full rounded-md px-4 py-2.5 text-sm font-semibold transition;
+    color: #ffffff;
+    background: #1e293b;
+  }
+
+  .aw-button:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.06);
+  }
+
+  .aw-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .aw-step {
+    @apply rounded-md border px-3 py-2 text-xs md:text-sm;
+    border-color: var(--aw-border);
+    background: var(--aw-surface-soft);
+    color: var(--aw-text-muted);
+  }
+
+  .aw-step-active {
+    border-color: #1e293b;
+    color: #ffffff;
+    background: #1e293b;
+  }
+}

@@ -1,0 +1,25 @@
+*.pyc
+__pycache__/
+.pytest_cache/
+.env
+*.egg-info/
+dist/
+build/
+.venv/
+node_modules/
+
+# Frontend package/cache artifacts
+frontend/node_modules/
+frontend/.vite/
+
+# Runtime-generated data (not committed)
+data/synthetic_contracts/
+data/vulnerable_contracts/
+results/
+
+# Cached parsed benchmark files (regenerated automatically)
+data/benchmarks/smartbugs/contracts.json
+data/benchmarks/solidifi/contracts.json
+
+# Local RAG corpus chunks (optional TF-IDF index)
+data/rag_corpus/
