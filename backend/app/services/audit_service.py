@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""
+主审计路径与 Benchmark / ``run_batched_vulnerability_audit`` 一致：
+对每个 chunk 使用 ``build_batch_audit_prompt`` 一次性请求多类漏洞，
+再用 ``parse_batch_json_response`` 按 ``vuln_name`` 对齐结果（非逐类多轮）。
+"""
+
 import asyncio
 import json
 import re
@@ -17,9 +23,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase2_llm_engine.cot_analyzer import (
     analyze_contract_cascade,
+    parse_batch_json_response,
     run_multi_llm_audit,
 )
 from phase2_llm_engine.llm_client import query_llm
+from phase2_llm_engine.prompt_builder import build_batch_audit_prompt
 from phase2_llm_engine.slither_runner import (
     format_slither_reference,
     is_slither_available,
@@ -85,93 +93,6 @@ def _extract_json_payload(raw_text: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             return None
     return None
-
-
-def _build_batch_messages(
-    source_code: str,
-    selected_batch: list[dict[str, Any]],
-    mode: str,
-    slither_reference: str = "",
-) -> list[dict[str, str]]:
-    mode_instruction = {
-        "binary": "Use YES/NO verdict for each vulnerability, with concise explanation.",
-        "non_binary": "Provide detailed explanation for each vulnerability.",
-        "cot": "Reason carefully and provide concise final explanations.",
-        "multi_vuln": "Audit all listed vulnerabilities together with per-item details.",
-    }.get(mode, "Provide detailed explanation for each vulnerability.")
-
-    vuln_block = "\n".join(
-        f"- {v['name']}: {v['description']}" for v in selected_batch
-    )
-    slither_block = (
-        "Static analysis reference (Slither, may include false positives):\n"
-        f"{slither_reference.strip()}\n\n"
-        if slither_reference.strip()
-        else ""
-    )
-
-    schema = {
-        "results": [
-            {
-                "vuln_name": "<must exactly match one requested vulnerability name>",
-                "verdict": "YES|NO|UNCERTAIN",
-                "confidence": 0.0,
-                "explanation": "<detailed explanation>",
-                "evidence_lines": [1, 2],
-                "recommendation": "<fix suggestion>",
-            }
-        ]
-    }
-
-    user_prompt = (
-        "Audit the smart contract for each selected vulnerability and return ONLY valid JSON.\n\n"
-        f"Mode: {mode}\n"
-        f"Instruction: {mode_instruction}\n\n"
-        "Selected vulnerabilities:\n"
-        f"{vuln_block}\n\n"
-        f"{slither_block}"
-        "Requirements:\n"
-        "1) Return one result object for every listed vulnerability.\n"
-        "2) Keep vuln_name exactly identical to input names.\n"
-        "3) Use verdict YES/NO (UNCERTAIN only if impossible).\n"
-        "4) explanation must be specific.\n"
-        "5) evidence_lines should contain line numbers when available.\n"
-        "6) recommendation should be practical.\n\n"
-        f"Output schema:\n{json.dumps(schema, indent=2)}\n\n"
-        f"Source Code:\n{source_code}"
-    )
-
-    return [
-        {
-            "role": "system",
-            "content": "You are a senior smart contract security auditor. Output valid JSON only.",
-        },
-        {"role": "user", "content": user_prompt},
-    ]
-
-
-def _format_batch_item_as_response(item: dict[str, Any]) -> str:
-    verdict = str(item.get("verdict", "UNCERTAIN")).upper()
-    explanation = str(item.get("explanation", "")).strip()
-    recommendation = str(item.get("recommendation", "")).strip()
-    confidence = item.get("confidence", None)
-    evidence_lines = item.get("evidence_lines", [])
-
-    line_tokens = [f"L{ln}" for ln in evidence_lines if isinstance(ln, int)]
-    lines_text = ", ".join(line_tokens) if line_tokens else "None"
-    confidence_text = (
-        f"{float(confidence):.2f}"
-        if isinstance(confidence, (int, float))
-        else "N/A"
-    )
-
-    return (
-        f"{verdict}\n"
-        f"Confidence: {confidence_text}\n"
-        f"Explanation: {explanation}\n"
-        f"Evidence lines: {lines_text}\n"
-        f"Recommendation: {recommendation}"
-    )
 
 
 def _is_positive_finding(response: str) -> bool:
@@ -418,11 +339,11 @@ async def _run_standard_batched_checks_streaming(
         )
 
         chunk_vulns = [vuln_by_name[name] for name in chunk_names if name in vuln_by_name]
-        messages = _build_batch_messages(
-            source_code=source_code,
-            selected_batch=chunk_vulns,
-            mode=mode,
-            slither_reference=slither_reference,
+        messages = build_batch_audit_prompt(
+            source_code,
+            chunk_vulns,
+            mode,
+            slither_reference,
         )
 
         try:
@@ -440,22 +361,10 @@ async def _run_standard_batched_checks_streaming(
                 f"LLM batch {chunk_idx}/{len(chunks)} timed out after {LLM_BATCH_TIMEOUT_SECONDS}s"
             ) from exc
 
-        payload = _extract_json_payload(raw_response)
-        parsed_results = payload.get("results", []) if isinstance(payload, dict) else []
-        parsed_by_name = {
-            str(item.get("vuln_name", "")).strip(): item
-            for item in parsed_results
-            if isinstance(item, dict)
-        }
-
-        for vuln_name in chunk_names:
-            item = parsed_by_name.get(vuln_name)
-            if item is None:
-                response = f"ERROR: Missing result for {vuln_name}\nRaw: {raw_response[:600]}"
-            else:
-                response = _format_batch_item_as_response(item)
-            result_item = {"vuln_name": vuln_name, "response": response}
-            results.append(result_item)
+        for item in parse_batch_json_response(raw_response, chunk_names):
+            vuln_name = item["vuln_name"]
+            response = item["response"]
+            results.append({"vuln_name": vuln_name, "response": response})
 
             preview = response.splitlines()[0] if response else "(empty)"
             await sse_manager.publish(

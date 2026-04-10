@@ -75,6 +75,9 @@ def _parse_batch_json_response(raw: str, vuln_names: list[str]) -> list[dict]:
     return results
 
 
+parse_batch_json_response = _parse_batch_json_response
+
+
 def _run_batch_audit_for_model(
     source_code: str,
     contract_name: str,
@@ -88,7 +91,7 @@ def _run_batch_audit_for_model(
     """
     **Canonical multi-class audit:** one structured JSON per chunk; rows matched by ``vuln_name``.
 
-    Flow: ``build_batch_audit_prompt`` → ``query_llm`` → ``_parse_batch_json_response``
+    Flow: ``build_batch_audit_prompt`` → ``query_llm`` → ``parse_batch_json_response``
     (each ``results[]`` item must reuse the exact catalog name). Chunk size:
     ``BATCH_VULNS_PER_PROMPT``.
     """
@@ -120,7 +123,7 @@ def _run_batch_audit_for_model(
             slither_reference=slither_reference,
         )
         raw = query_llm(messages, model=model, temperature=temperature)
-        vuln_results.extend(_parse_batch_json_response(raw, chunk))
+        vuln_results.extend(parse_batch_json_response(raw, chunk))
         if progress_callback:
             progress_callback(ci + 1, total_chunks, f"batch_json_chunk_{ci + 1}/{total_chunks}")
 
