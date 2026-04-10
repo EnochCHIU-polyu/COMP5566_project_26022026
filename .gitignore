@@ -23,3 +23,6 @@ data/benchmarks/solidifi/contracts.json
 
 # Local RAG corpus chunks (optional TF-IDF index)
 data/rag_corpus/
+
+.DS_Store
+**/.DS_Store
