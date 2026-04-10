@@ -27,6 +27,8 @@ export function BenchmarkPage() {
   const [multiModelsCsv, setMultiModelsCsv] = useState(
     "deepseek-v3.2,gpt-4o-mini",
   );
+  const [cascadeSmall, setCascadeSmall] = useState("deepseek-v3.2");
+  const [cascadeLarge, setCascadeLarge] = useState("deepseek-v3.2");
   const [multiParallel, setMultiParallel] = useState(false);
   const [multiAggregation, setMultiAggregation] = useState<
     "majority" | "consensus"
@@ -100,6 +102,8 @@ export function BenchmarkPage() {
         model,
         mode,
         pipeline,
+        cascade_small: cascadeSmall,
+        cascade_large: cascadeLarge,
         multi_models: multiModels,
         multi_parallel: multiParallel,
         multi_aggregation: multiAggregation,
@@ -238,6 +242,7 @@ export function BenchmarkPage() {
                 }
               >
                 <option value="standard">standard</option>
+                <option value="cascade">cascade</option>
                 <option value="multi_llm">multi_llm</option>
               </select>
             </label>
@@ -268,6 +273,39 @@ export function BenchmarkPage() {
               Prefer shared Supabase dataset
             </label>
           </div>
+
+          {pipeline === "cascade" && (
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="text-sm aw-subtle">
+                Cascade small model
+                <select
+                  className="aw-input mt-1"
+                  value={cascadeSmall}
+                  onChange={(e) => setCascadeSmall(e.target.value)}
+                >
+                  {KNOWN_MODELS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm aw-subtle">
+                Cascade large model
+                <select
+                  className="aw-input mt-1"
+                  value={cascadeLarge}
+                  onChange={(e) => setCascadeLarge(e.target.value)}
+                >
+                  {KNOWN_MODELS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
 
           {pipeline === "multi_llm" && (
             <div className="grid gap-3 md:grid-cols-3">

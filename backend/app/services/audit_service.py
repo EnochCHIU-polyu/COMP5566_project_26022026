@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase2_llm_engine.cot_analyzer import (
+    analyze_contract_cascade,
     run_multi_llm_audit,
 )
 from phase2_llm_engine.llm_client import query_llm
@@ -717,7 +718,25 @@ class AuditService:
 
             effective_catalog = [v for v in vuln_catalog if v["name"] in set(effective_names)]
 
-            if req.pipeline == "multi_llm" and effective_names:
+            if req.pipeline == "cascade" and effective_names:
+                cascade_result = await asyncio.wait_for(
+                    to_thread(
+                        analyze_contract_cascade,
+                        source_for_audit,
+                        req.contract_name,
+                        "deepseek-v3.2",
+                        req.model,
+                        0.0,
+                        False,
+                        False,
+                        None,
+                        effective_names,
+                        slither_reference,
+                    ),
+                    timeout=600,
+                )
+                llm_results = cascade_result.get("vuln_results", [])
+            elif req.pipeline == "multi_llm" and effective_names:
                 model_pool = [req.model, "deepseek-v3.2"]
                 # Keep order but remove duplicates.
                 unique_models = list(dict.fromkeys(model_pool))
@@ -771,6 +790,18 @@ class AuditService:
                 other_candidates,
             )
             llm_results = [*llm_results, *other_results]
+
+            if req.pipeline == "cascade":
+                for idx, item in enumerate(llm_results, start=1):
+                    vuln_name = str(item.get("vuln_name", "unknown"))
+                    response = str(item.get("response", ""))
+                    preview = response.splitlines()[0] if response else "(empty)"
+                    await sse_manager.publish(
+                        audit_id,
+                        event="llm_chunk",
+                        stage="llm",
+                        payload={"index": idx, "text": f"[{vuln_name}] {preview}"},
+                    )
 
             summary = _build_final_summary(
                 [
