@@ -14,7 +14,6 @@ from phase1_data_pipeline.benchmark_datasets import load_benchmark
 from phase1_data_pipeline.contract_preprocessor import preprocess_contract
 from phase2_llm_engine.cot_analyzer import (
     analyze_contract,
-    analyze_contract_cascade,
     run_multi_llm_audit,
 )
 from phase2_llm_engine.llm_client import query_llm
@@ -130,7 +129,7 @@ class BenchmarkService:
         bench_vulns = sorted({v for vulns in ground_truth.values() for v in vulns})
 
         # Vulnerability scoring uses ``vuln_filter=bench_vulns``; ``analyze_contract`` /
-        # ``analyze_contract_cascade`` (filtered) / ``run_multi_llm_audit`` all resolve types
+        # ``run_multi_llm_audit`` both resolve types
         # via ``run_batched_vulnerability_audit`` (chunked JSON, ``vuln_name``-keyed parse).
 
         audit_results: list[dict[str, Any]] = []
@@ -146,21 +145,7 @@ class BenchmarkService:
                 )
                 source_code = str(preprocessed.get("source_code", ""))
 
-                if req.pipeline == "cascade":
-                    result = await to_thread(
-                        analyze_contract_cascade,
-                        source_code,
-                        name,
-                        req.cascade_small,
-                        req.cascade_large,
-                        0.0,
-                        False,
-                        False,
-                        None,
-                        bench_vulns,
-                        "",
-                    )
-                elif req.pipeline == "multi_llm":
+                if req.pipeline == "multi_llm":
                     models = req.multi_models or [req.model]
                     result = await to_thread(
                         run_multi_llm_audit,

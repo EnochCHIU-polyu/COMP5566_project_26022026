@@ -89,7 +89,6 @@ export function AuditInput({ onSubmit, disabled = false }: Props) {
           onChange={(e) => setPipeline(e.target.value)}
         >
           <option value="standard">standard</option>
-          <option value="cascade">cascade</option>
           <option value="multi_llm">multi_llm</option>
         </select>
       </div>

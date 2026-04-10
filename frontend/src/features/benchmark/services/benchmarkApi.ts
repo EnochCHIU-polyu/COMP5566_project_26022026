@@ -2,7 +2,7 @@ import { API_BASE } from "../../../lib/apiConfig";
 
 export type BenchmarkDataset = "smartbugs" | "solidifi";
 export type BenchmarkMode = "binary" | "non_binary" | "cot";
-export type BenchmarkPipeline = "standard" | "cascade" | "multi_llm";
+export type BenchmarkPipeline = "standard" | "multi_llm";
 
 export interface BenchmarkContractPreview {
   name: string;
@@ -24,8 +24,6 @@ export interface BenchmarkRunRequest {
   model: string;
   mode: BenchmarkMode;
   pipeline: BenchmarkPipeline;
-  cascade_small: string;
-  cascade_large: string;
   multi_models: string[];
   multi_parallel: boolean;
   multi_aggregation: "majority" | "consensus";

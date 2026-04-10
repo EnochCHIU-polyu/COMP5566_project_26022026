@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 BenchmarkDataset = Literal["smartbugs", "solidifi"]
-BenchmarkPipeline = Literal["standard", "cascade", "multi_llm"]
+BenchmarkPipeline = Literal["standard", "multi_llm"]
 BenchmarkMode = Literal["binary", "non_binary", "cot", "multi_vuln"]
 
 
@@ -32,8 +32,6 @@ class BenchmarkRunRequest(BaseModel):
     mode: BenchmarkMode = "non_binary"
 
     pipeline: BenchmarkPipeline = "standard"
-    cascade_small: str = "deepseek-v3.2"
-    cascade_large: str = "deepseek-v3.2"
     multi_models: List[str] = Field(default_factory=lambda: ["deepseek-v3.2", "gpt-4o-mini"])
     multi_parallel: bool = False
     multi_aggregation: Literal["majority", "consensus"] = "majority"
