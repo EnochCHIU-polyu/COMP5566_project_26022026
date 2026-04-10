@@ -10,7 +10,7 @@ export function LandingPage() {
             Smart Contract Security
           </p>
           <h1 className="aw-title mt-3 text-3xl font-bold md:text-4xl">
-            Simple start page
+            Start page
           </h1>
           <p className="aw-subtle mx-auto mt-3 max-w-xl text-sm md:text-base">
             Click start to open the audit page.
