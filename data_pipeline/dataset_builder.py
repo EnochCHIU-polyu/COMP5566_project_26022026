@@ -225,6 +225,79 @@ def _resolve_slither_labels(
         return [str(s) for s in raw_slither]
 
 
+def _extract_detectors_from_results(results_raw: Any) -> list[str]:
+    """Extract detector IDs from the fallback parquet ``results`` payload."""
+    if not results_raw:
+        return []
+
+    payload = results_raw
+    if isinstance(results_raw, str):
+        try:
+            payload = json.loads(results_raw)
+        except json.JSONDecodeError:
+            return []
+
+    if not isinstance(payload, dict):
+        return []
+
+    detectors = ((payload.get("results") or {}).get("detectors")) or []
+    names: list[str] = []
+    for det in detectors:
+        if isinstance(det, dict):
+            name = det.get("check")
+            if name:
+                names.append(str(name))
+        elif det:
+            names.append(str(det))
+    return names
+
+
+def _load_streaming_dataset(dataset_name: str, config: str, split: str):
+    """
+    Load streaming dataset and transparently fall back to Parquet when dataset
+    scripts are unsupported by the installed ``datasets`` version.
+    """
+    from datasets import load_dataset  # noqa: PLC0415
+
+    try:
+        dataset = load_dataset(
+            dataset_name,
+            config,
+            split=split,
+            streaming=True,
+        )
+        return dataset, dataset.features.get("slither")
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "Dataset scripts are no longer supported" not in msg:
+            raise
+
+        # This dataset exposes script-free parquet shards under data/raw.
+        if dataset_name == "mwritescode/slither-audited-smart-contracts":
+            if config != "all" or split != "train":
+                raise RuntimeError(
+                    "Current 'datasets' no longer supports the upstream loading "
+                    "script for this dataset. Parquet fallback currently supports "
+                    "only config='all' and split='train'."
+                ) from exc
+
+            parquet_glob = f"hf://datasets/{dataset_name}/data/raw/*.parquet"
+            logger.warning(
+                "Dataset script unsupported by local 'datasets'; falling back "
+                "to Parquet shards: %s",
+                parquet_glob,
+            )
+            dataset = load_dataset(
+                "parquet",
+                data_files=parquet_glob,
+                split="train",
+                streaming=True,
+            )
+            return dataset, None
+
+        raise
+
+
 def _safe_filename(address: str, index: int) -> str:
     """
     Produce a safe, unique filename stem for a contract.
@@ -325,16 +398,11 @@ def iter_filtered_contracts(
     )
     logger.info("Watching for %d Slither detectors.", len(wanted_detectors))
 
-    dataset = load_dataset(
-        dataset_name,
-        config,
+    dataset, slither_feature = _load_streaming_dataset(
+        dataset_name=dataset_name,
+        config=config,
         split=split,
-        streaming=True,
-        trust_remote_code=True,
     )
-
-    # Grab the feature descriptor so we can decode ClassLabel integers
-    slither_feature = dataset.features["slither"]
 
     yielded = 0
     examined = 0
@@ -347,8 +415,15 @@ def iter_filtered_contracts(
         if not src:
             continue
 
-        # Resolve detector integers → strings
-        detectors = _resolve_slither_labels(row.get("slither") or [], slither_feature)
+        # Resolve detector integers → strings for the original schema, or parse
+        # detector results from parquet fallback rows.
+        if "slither" in row:
+            detectors = _resolve_slither_labels(
+                row.get("slither") or [],
+                slither_feature,
+            )
+        else:
+            detectors = _extract_detectors_from_results(row.get("results"))
 
         # Check if any fired detector belongs to a wanted category
         matched_categories: list[str] = []
@@ -364,7 +439,7 @@ def iter_filtered_contracts(
             continue
 
         yield {
-            "address": str(row.get("address") or ""),
+            "address": str(row.get("address") or row.get("contracts") or ""),
             "source_code": src,
             "slither_detectors": detectors,          # ALL detectors that fired
             "matched_detectors": matched_detectors,  # Only the ones in target cats

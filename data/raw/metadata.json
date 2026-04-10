@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-04-10T04:28:35.456555+00:00",
+  "total_contracts": 5,
+  "by_category": {
+    "Reentrancy": 3,
+    "Access Control": 2
+  },
+  "contracts": [
+    {
+      "id": "5f5a251b06fe",
+      "filename": "contract_00c83aeCC790e8a4453e.sol",
+      "address": "00c83aeCC790e8a4453e5dD3B0B4b3680501a7A7",
+      "vuln_types": [
+        "Reentrancy"
+      ],
+      "slither_detectors_matched": [
+        "reentrancy-no-eth"
+      ],
+      "slither_detectors_all": [
+        "write-after-write",
+        "divide-before-multiply",
+        "incorrect-equality",
+        "reentrancy-no-eth"
+      ],
+      "source_dataset": "mwritescode/slither-audited-smart-contracts",
+      "split": "train",
+      "saved_at": "2026-04-10T04:28:35.421753+00:00"
+    },
+    {
+      "id": "5abc41e9d0de",
+      "filename": "contract_01A6F6Ac4F5b2564e8C5.sol",
+      "address": "01A6F6Ac4F5b2564e8C52BA687E7019D0E81E7e8",
+      "vuln_types": [
+        "Reentrancy"
+      ],
+      "slither_detectors_matched": [
+        "reentrancy-no-eth"
+      ],
+      "slither_detectors_all": [
+        "uninitialized-state",
+        "divide-before-multiply",
+        "reentrancy-no-eth",
+        "incorrect-equality",
+        "unchecked-transfer",
+        "unused-return",
+        "locked-ether"
+      ],
+      "source_dataset": "mwritescode/slither-audited-smart-contracts",
+      "split": "train",
+      "saved_at": "2026-04-10T04:28:35.422359+00:00"
+    },
+    {
+      "id": "5e28805f9410",
+      "filename": "contract_05b5db99f390aba70b44.sol",
+      "address": "05b5db99f390aba70b444d394be25f6074d7ac5a",
+      "vuln_types": [
+        "Reentrancy"
+      ],
+      "slither_detectors_matched": [
+        "reentrancy-no-eth"
+      ],
+      "slither_detectors_all": [
+        "uninitialized-local",
+        "divide-before-multiply",
+        "incorrect-equality",
+        "reentrancy-no-eth"
+      ],
+      "source_dataset": "mwritescode/slither-audited-smart-contracts",
+      "split": "train",
+      "saved_at": "2026-04-10T04:28:35.423119+00:00"
+    },
+    {
+      "id": "d6e02793d808",
+      "filename": "contract_0689aa2234d06Ac0d04c.sol",
+      "address": "0689aa2234d06Ac0d04cdac874331d287aFA4B43",
+      "vuln_types": [
+        "Access Control"
+      ],
+      "slither_detectors_matched": [
+        "controlled-delegatecall"
+      ],
+      "slither_detectors_all": [
+        "controlled-delegatecall"
+      ],
+      "source_dataset": "mwritescode/slither-audited-smart-contracts",
+      "split": "train",
+      "saved_at": "2026-04-10T04:28:35.423405+00:00"
+    },
+    {
+      "id": "4619dd54622c",
+      "filename": "contract_08ca538F87668521472e.sol",
+      "address": "08ca538F87668521472e805b4642681ee297ee2b",
+      "vuln_types": [
+        "Access Control"
+      ],
+      "slither_detectors_matched": [
+        "arbitrary-send"
+      ],
+      "slither_detectors_all": [
+        "tx-origin",
+        "divide-before-multiply",
+        "name-reused",
+        "erc20-interface",
+        "arbitrary-send",
+        "unchecked-lowlevel",
+        "incorrect-equality",
+        "uninitialized-local",
+        "unchecked-transfer",
+        "unused-return",
+        "locked-ether"
+      ],
+      "source_dataset": "mwritescode/slither-audited-smart-contracts",
+      "split": "train",
+      "saved_at": "2026-04-10T04:28:35.424085+00:00"
+    }
+  ]
+}

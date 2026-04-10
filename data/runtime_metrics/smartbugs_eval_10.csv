@@ -1,0 +1,10 @@
+class,tp,fp,tn,fn,precision,recall,f1,support
+access_control,8,0,0,2,1.0,0.8,0.8889,10
+arithmetic,0,8,2,0,0.0,0.0,0.0,0
+bad_randomness,0,10,0,0,0.0,0.0,0.0,0
+denial_of_service,0,7,3,0,0.0,0.0,0.0,0
+front_running,0,10,0,0,0.0,0.0,0.0,0
+reentrancy,0,9,1,0,0.0,0.0,0.0,0
+short_addresses,0,9,1,0,0.0,0.0,0.0,0
+time_manipulation,0,6,4,0,0.0,0.0,0.0,0
+unchecked_low_level_calls,0,10,0,0,0.0,0.0,0.0,0

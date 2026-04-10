@@ -1,0 +1,11 @@
+ground_truth\predicted,access_control,arithmetic,bad_randomness,denial_of_service,front_running,reentrancy,short_addresses,time_manipulation,unchecked_low_level_calls,none
+access_control,0,2,5,0,0,0,2,1,0,0
+arithmetic,0,0,0,0,0,0,0,0,0,0
+bad_randomness,0,0,0,0,0,0,0,0,0,0
+denial_of_service,0,0,0,0,0,0,0,0,0,0
+front_running,0,0,0,0,0,0,0,0,0,0
+reentrancy,0,0,0,0,0,0,0,0,0,0
+short_addresses,0,0,0,0,0,0,0,0,0,0
+time_manipulation,0,0,0,0,0,0,0,0,0,0
+unchecked_low_level_calls,0,0,0,0,0,0,0,0,0,0
+none,0,0,0,0,0,0,0,0,0,0
