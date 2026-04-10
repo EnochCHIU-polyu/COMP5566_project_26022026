@@ -43,6 +43,7 @@ from phase2_llm_engine.cot_analyzer import (                                  # 
     analyze_contract,
     run_multi_llm_audit,
 )
+from phase4_evaluation.swe_mapping import build_swe_mapping_rows              # noqa: E402
 from phase4_evaluation.scorer import (                                        # noqa: E402
     compute_per_vuln_metrics,
     evaluate_batch,
@@ -114,6 +115,16 @@ def _print_table(per_vuln: dict[str, dict]) -> None:
     _info("")
     _info("=== Per-Vulnerability-Type Results ===")
     _info(sep)
+
+
+def _print_swe_mapping(rows: list[dict]) -> None:
+    _info("")
+    _info("=== SWE Mapping (Evaluated Labels) ===")
+    for row in rows:
+        field = row["swe_field"]
+        if row.get("swe_field_id"):
+            field = f"{row['swe_field_id']}. {field}"
+        _info(f"- {row['label']} -> {field} | {row['swe_weakness']}")
     _info(header)
     _info(sep)
     for vtype, m in sorted(per_vuln.items(), key=lambda kv: kv[1].get("f1", 0), reverse=True):
@@ -150,7 +161,9 @@ async def _run(args: argparse.Namespace) -> None:
         for lbl in c["labels"]:
             all_labels.add(lbl["vuln_type"])
     bench_vulns = sorted(all_labels)
+    swe_mapping = build_swe_mapping_rows(bench_vulns)
     _info(f"[ground-truth vuln types] {bench_vulns}")
+    _print_swe_mapping(swe_mapping)
 
     ground_truth: dict[str, list[str]] = {
         c["name"]: [lb["vuln_type"] for lb in c["labels"]]
@@ -239,6 +252,7 @@ async def _run(args: argparse.Namespace) -> None:
         "folder": str(folder),
         "ground_truth_label": vuln_label,
         "bench_vulns": bench_vulns,
+        "swe_mapping": swe_mapping,
         "contracts_evaluated": len(contracts),
         "pipeline": args.pipeline,
         "model": args.model,
@@ -254,7 +268,18 @@ async def _run(args: argparse.Namespace) -> None:
     _info(f"\n[saved] {out_path.resolve()} ({out_path.stat().st_size} bytes)")
 
     # stdout: per-vuln summary JSON (useful for scripting / piping)
-    print(json.dumps({"aggregate": agg, "per_vuln_metrics": per_vuln}, ensure_ascii=False, indent=2), flush=True)
+    print(
+        json.dumps(
+            {
+                "aggregate": agg,
+                "per_vuln_metrics": per_vuln,
+                "swe_mapping": swe_mapping,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        flush=True,
+    )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

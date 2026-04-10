@@ -43,6 +43,7 @@ class BenchmarkRunResponse(BaseModel):
     dataset: BenchmarkDataset
     loaded: int
     vuln_types_under_test: List[str] = Field(default_factory=list)
+    swe_mapping: List[Dict[str, Any]] = Field(default_factory=list)
     scores: Dict[str, Any] = Field(default_factory=dict)
     audit_results: List[Dict[str, Any]] = Field(default_factory=list)
 

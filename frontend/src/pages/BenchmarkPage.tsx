@@ -58,6 +58,7 @@ export function BenchmarkPage() {
   const aggregateCounts = runResult?.scores?.aggregate?.counts ?? {};
   const aggregateMetrics = runResult?.scores?.aggregate?.metrics ?? {};
   const skipped = runResult?.scores?.aggregate?.skipped_unparseable ?? 0;
+  const sweMapping = runResult?.swe_mapping ?? [];
 
   const runDisabled = contracts.length === 0 || isRunning;
 
@@ -396,6 +397,44 @@ export function BenchmarkPage() {
                 </article>
               ))}
             </div>
+          </section>
+        )}
+
+        {runResult && (
+          <section className="aw-card space-y-3">
+            <h2 className="aw-title text-lg font-semibold">SWE Mapping</h2>
+            <p className="aw-subtle text-sm">
+              Each evaluated vulnerability label mapped to SWE field and
+              weakness.
+            </p>
+            {sweMapping.length === 0 ? (
+              <p className="aw-subtle text-sm">No mapping data available.</p>
+            ) : (
+              <div className="overflow-auto rounded-md border border-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-[#1E293B]">
+                    <tr>
+                      <th className="px-3 py-2">Label</th>
+                      <th className="px-3 py-2">SWE Field</th>
+                      <th className="px-3 py-2">Weakness</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sweMapping.map((row) => (
+                      <tr key={row.label} className="border-t border-slate-200">
+                        <td className="px-3 py-2">{row.label}</td>
+                        <td className="px-3 py-2">
+                          {row.swe_field_id
+                            ? `${row.swe_field_id}. ${row.swe_field}`
+                            : row.swe_field}
+                        </td>
+                        <td className="px-3 py-2">{row.swe_weakness}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         )}
 

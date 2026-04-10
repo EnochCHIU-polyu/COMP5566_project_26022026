@@ -51,6 +51,10 @@ from phase2_llm_engine.cot_analyzer import (                                  # 
     analyze_contract,
     run_multi_llm_audit,
 )
+from phase4_evaluation.swe_mapping import (                                   # noqa: E402
+    build_swe_mapping_rows,
+    resolve_swe_label,
+)
 from phase4_evaluation.scorer import (                                        # noqa: E402
     compute_per_vuln_metrics,
     evaluate_batch,
@@ -137,17 +141,22 @@ async def _run_category(
     """Run the full audit+score pipeline for one category folder. Returns summary dict."""
     folder_name = folder.name.lower()
     vuln_label = SMARTBUGS_CATEGORY_MAP.get(folder_name, folder_name.replace("_", " ").title())
+    swe_summary = resolve_swe_label(vuln_label)
 
     contracts = _collect_contracts(folder, vuln_label, vuln_json_map)
     if not contracts:
         return {
             "category": folder_name,
             "label": vuln_label,
+            "swe_field_id": swe_summary.get("swe_field_id"),
+            "swe_field": swe_summary.get("swe_field", "Unmapped"),
+            "swe_weakness": swe_summary.get("swe_weakness", "Unmapped"),
             "contracts": 0,
             "skipped": 0,
             "tp": 0, "fp": 0, "tn": 0, "fn": 0,
             "precision": 0.0, "recall": 0.0, "f1": 0.0,
             "per_vuln_metrics": {},
+            "swe_mapping": [],
             "audit_results": [],
             "error": "no .sol files",
         }
@@ -179,6 +188,9 @@ async def _run_category(
     return {
         "category": folder_name,
         "label": vuln_label,
+        "swe_field_id": swe_summary.get("swe_field_id"),
+        "swe_field": swe_summary.get("swe_field", "Unmapped"),
+        "swe_weakness": swe_summary.get("swe_weakness", "Unmapped"),
         "contracts": len(contracts),
         "skipped": agg.get("skipped_unparseable", 0),
         "tp": counts.get("TP", 0),
@@ -189,6 +201,7 @@ async def _run_category(
         "recall":    metrics.get("recall",    0.0),
         "f1":        metrics.get("f1",        0.0),
         "per_vuln_metrics": per_vuln,
+        "swe_mapping": build_swe_mapping_rows(bench_vulns),
         "audit_results": audit_results,
     }
 
@@ -196,8 +209,10 @@ async def _run_category(
 def _print_summary_table(rows: list[dict]) -> None:
     """Print a formatted multi-category summary table."""
     col_cat  = max(len("Category"), max(len(r["label"]) for r in rows)) + 2
+    col_field = max(len("SWE Field"), max(len(str(r.get("swe_field", "Unmapped"))) for r in rows)) + 2
+    col_weak = max(len("Weakness"), max(len(str(r.get("swe_weakness", "Unmapped"))) for r in rows)) + 2
     header = (
-        f"{'Category':<{col_cat}} {'#':>4}  "
+        f"{'Category':<{col_cat}} {'SWE Field':<{col_field}} {'Weakness':<{col_weak}} {'#':>4}  "
         f"{'TP':>4} {'FP':>4} {'TN':>4} {'FN':>4}  "
         f"{'Precision':>9} {'Recall':>7} {'F1':>7}"
     )
@@ -210,8 +225,11 @@ def _print_summary_table(rows: list[dict]) -> None:
     _info("  " + sep)
     for r in rows:
         err = "  [error]" if r.get("error") else ""
+        swe_field = str(r.get("swe_field", "Unmapped"))
+        if r.get("swe_field_id"):
+            swe_field = f"{r['swe_field_id']}. {swe_field}"
         _info(
-            f"  {r['label']:<{col_cat}} {r['contracts']:>4}  "
+            f"  {r['label']:<{col_cat}} {swe_field:<{col_field}} {str(r.get('swe_weakness','Unmapped')):<{col_weak}} {r['contracts']:>4}  "
             f"{r['tp']:>4} {r['fp']:>4} {r['tn']:>4} {r['fn']:>4}  "
             f"{r['precision']:>9.3f} {r['recall']:>7.3f} {r['f1']:>7.3f}"
             + err
@@ -228,7 +246,7 @@ def _print_summary_table(rows: list[dict]) -> None:
     f1   = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
     total_c = sum(r["contracts"] for r in rows)
     _info(
-        f"  {'TOTAL':<{col_cat}} {total_c:>4}  "
+        f"  {'TOTAL':<{col_cat}} {'-':<{col_field}} {'-':<{col_weak}} {total_c:>4}  "
         f"{tp:>4} {fp:>4} {tn:>4} {fn:>4}  "
         f"{prec:>9.3f} {rec:>7.3f} {f1:>7.3f}"
     )
@@ -301,6 +319,9 @@ async def _run(args: argparse.Namespace) -> None:
     summary_rows = [
         {
             "category": r["label"],
+            "swe_field_id": r.get("swe_field_id"),
+            "swe_field": r.get("swe_field", "Unmapped"),
+            "swe_weakness": r.get("swe_weakness", "Unmapped"),
             "contracts": r["contracts"],
             "tp": r["tp"], "fp": r["fp"], "tn": r["tn"], "fn": r["fn"],
             "precision": round(r["precision"], 4),

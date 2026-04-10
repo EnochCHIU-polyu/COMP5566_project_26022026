@@ -18,6 +18,7 @@ from phase2_llm_engine.cot_analyzer import (
     run_multi_llm_audit,
 )
 from phase2_llm_engine.llm_client import query_llm
+from phase4_evaluation.swe_mapping import build_swe_mapping_rows
 from phase4_evaluation.scorer import evaluate_batch
 
 from app.schemas.benchmark import (
@@ -215,6 +216,7 @@ class BenchmarkService:
             dataset=req.dataset,
             loaded=len(subset),
             vuln_types_under_test=bench_vulns,
+            swe_mapping=build_swe_mapping_rows(bench_vulns),
             scores=scores,
             audit_results=audit_results,
         )

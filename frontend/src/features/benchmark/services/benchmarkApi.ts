@@ -35,6 +35,13 @@ export interface BenchmarkRunResponse {
   dataset: BenchmarkDataset;
   loaded: number;
   vuln_types_under_test: string[];
+  swe_mapping?: Array<{
+    label: string;
+    covered: boolean;
+    swe_field_id: number | null;
+    swe_field: string;
+    swe_weakness: string;
+  }>;
   scores: {
     aggregate?: {
       counts?: Record<string, number>;
